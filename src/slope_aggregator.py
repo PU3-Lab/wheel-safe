@@ -99,9 +99,11 @@ class GlobalSlopeAggregator:
         # 수직 벽면 필터 (카메라 시선 방향 내적 이용)
         forward_vec = np.array([0, 0, 1])
         cos_with_forward = np.abs(np.sum(normal_vectors * forward_vec, axis=-1))
-        wall_mask = cos_with_forward > np.cos(
-            np.radians(45)
-        )  # 60도 이상 마주보는 면 제외
+        wall_mask = cos_with_forward > np.cos(np.radians(40))
+
+        vertical_vec = np.array([0, -1, 0])
+        cos_with_vertical = np.abs(np.sum(normal_vectors * vertical_vec, axis=-1))
+        ground_mask = cos_with_vertical > np.cos(np.radians(45))
 
         # 최종 유효 마스크 통합
         valid_mask = (
@@ -111,6 +113,9 @@ class GlobalSlopeAggregator:
             & width_mask
             & (~wall_mask)
         )
+
+        # 최종 유효 마스크 업데이트
+        valid_mask &= (~wall_mask) & ground_mask
 
         # 모델 마스크(external_mask)가 제공된 경우 결합
         if external_mask is not None:

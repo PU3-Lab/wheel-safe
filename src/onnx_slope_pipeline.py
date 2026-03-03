@@ -39,30 +39,32 @@ class ONNXSlopePipeline:
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
         # 모델 규격에 맞춘 리사이즈 (1024x2048)
-        input_h, input_w = 1024, 2048
-        img_resized = cv2.resize(img_rgb, (input_w, input_h))
+        # input_h, input_w = 1024, 2048
+        # img_resized = cv2.resize(img_rgb, (input_w, input_h))
 
-        input_data = (img_resized / 255.0 - self.mean) / self.std
+        input_data = cv2.resize(img_rgb, (2048, 1024))
+        input_data = (input_data / 255.0 - self.mean) / self.std
         input_data = input_data.transpose(2, 0, 1)[np.newaxis, :].astype(np.float32)
 
-        # 모델 추론
         outputs = self.session.run(None, {self.input_name: input_data})
         pred = np.argmax(outputs[0], axis=1).squeeze()
         pred_full = cv2.resize(pred, (w, h), interpolation=cv2.INTER_NEAREST)
 
-        # [핵심] 통합 필터링 전략
-        # 1. 긍정 리스트: 지금까지 발견된 모든 바닥 인덱스 통합 (7, 10, 11, 13)
-        road_indices = [7, 10, 11, 13]
+        road_indices = [7, 13]
+        road_mask = np.isin(pred_full, road_indices).astype(np.uint8)
 
-        # 2. 부정 리스트: 담장, 벽, 건물 등 장애물 인덱스 (2, 3, 4, 5)
-        obstacle_indices = [2, 3, 4, 5]
+        # 2. [전처리] 기하학적 담장 차단 (Geometric Wall Clipping)
+        # (A) 화면 상단 50% 제거: 휠체어 주행 경사도는 하단에서 결정됩니다.
+        road_mask[: int(h * 0.5), :] = 0
 
-        # (바닥 후보군에 해당함) AND (장애물군에는 해당하지 않음)
-        road_mask = np.isin(pred_full, road_indices) & ~np.isin(
-            pred_full, obstacle_indices
-        )
+        # (B) 화면 우측 20% 제거: 이미지상 담장이 위치하는 구간을 계산에서 제외합니다.
+        road_mask[:, int(w * 0.8) :] = 0
 
-        return road_mask.astype(np.uint8), pred_full
+        # 3. 노이즈 정리 (Morphology Open)
+        kernel = np.ones((7, 7), np.uint8)
+        road_mask = cv2.morphologyEx(road_mask, cv2.MORPH_OPEN, kernel)
+
+        return road_mask, pred_full
 
     def run_pipeline(self, left_path, disp_path, conf_path, output_dir='./output'):
         left_img = cv2.imread(str(left_path))
