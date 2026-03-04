@@ -3,10 +3,41 @@ from __future__ import annotations
 import configparser
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TypedDict
 
 import cv2
 import numpy as np
+
+
+class StatsDic(TypedDict, total=False):
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    baseline_m: float
+    disp_scale: float
+    roi_ratio: float
+    conf_th: float
+    min_d: float
+    max_d: float
+    conf_ratio: float
+    disp_ratio: float
+    dist_ratio: float
+    external_mask_ratio: float
+    final_valid_ratio: float
+    final_valid_count: int
+    slope_method: str | None
+    yz_a: float | None
+    yz_b: float | None
+    yz_inlier_ratio: float | None
+    yz_inlier_thresh_m: float | None
+    plane_normal: list[float] | None
+    plane_d: float | None
+    ransac_inlier_ratio: float | None
+    ransac_fit_points: int | None
+    plane_avg: float | None
+    plane_signed: float | None
+    plane_inlier_thresh_m: float
 
 
 @dataclass
@@ -39,11 +70,11 @@ class SlopeAggregator:
         conf_th: int = 40,
         min_d: float = 1.0,
         max_d: float = 8.0,
-        roi_ratio: float = 0.35,
+        roi_ratio: float = 0.25,
         # ransac
         ransac_iters: int = 500,
         ransac_inlier_thresh_m: float = 0.05,  # for plane (meters)
-        yz_inlier_thresh_m: float = 0.05,  # for YZ line (meters)
+        yz_inlier_thresh_m: float = 0.02,  # for YZ line (meters)
         max_points: int = 50000,
         debug_print: bool = True,
     ):
@@ -102,6 +133,8 @@ class SlopeAggregator:
                 rx_key = k
                 break
         rx_pitch = float(cfg[stereo_section][rx_key]) if rx_key else None
+
+        print('rx_pitch', rx_pitch)
 
         return CameraParams(
             fx=fx,
@@ -314,7 +347,7 @@ class SlopeAggregator:
             em_ratio = float(em.mean())
             valid &= em
 
-        stats = {
+        stats: StatsDic = {
             'fx': self.cam.fx,
             'fy': self.cam.fy,
             'cx': self.cam.cx,
@@ -346,11 +379,17 @@ class SlopeAggregator:
         if self.debug_print:
             print('[SLOPE] stats:', stats)
 
-        if cast(int, stats['final_valid_count']) < 2000:
+        roi_total_count = roi.sum()
+        valid_count = stats['final_valid_count']
+        valid_ratio = valid_count / roi_total_count if roi_total_count > 0 else 0
+        # 임계값 (예: 0.5%). 해상도에 상관없이 동작함.
+        min_ratio_threshold = 5e-3
+
+        if valid_ratio < min_ratio_threshold:
             return {
                 'avg_slope': float('nan'),
                 'signed_slope': float('nan'),
-                'reason': 'valid too sparse',
+                'reason': f'too sparse (ratio: {valid_ratio:.4f})',
                 'stats': stats,
                 'valid': valid,
                 'plane_normal': None,
@@ -472,6 +511,21 @@ class SlopeAggregator:
                 'plane_inlier:',
                 stats.get('ransac_inlier_ratio'),
             )
+
+        # ======================================================
+        # [수정 포인트 2] 결과 범위 체크 (리턴 직전)
+        # ======================================================
+        # 6.26도처럼 장애물 때문에 튀는 값을 잡기 위한 안전장치
+        # 1. 설정값에서 읽어온 설치 Pitch 각도 (Radian -> Degree)
+        pitch_offset_deg = 0.0
+        if self.cam.rx_pitch_rad is not None:
+            # RX 값이 양수인지 음수인지에 따라 설치 상태가 다름
+            pitch_offset_deg = np.degrees(self.cam.rx_pitch_rad)
+
+        if not np.isnan(avg):
+            avg = avg + pitch_offset_deg
+            signed = (signed or 0.0) - pitch_offset_deg
+            reason = reason
 
         return {
             'avg_slope': float(avg) if np.isfinite(avg) else float('nan'),

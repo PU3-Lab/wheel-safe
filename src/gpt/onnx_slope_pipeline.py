@@ -19,15 +19,15 @@ class ONNXSlopePipeline:
         onnx_path: str | Path,
         config_path: str | Path,  # Depth_*.conf
         mode: str = 'LEFT_CAM_FHD',
-        morph_kernel: int = 5,
+        morph_kernel: int = 7,
         # slope params
         disp_scale: float = 16.0,
-        conf_th: int = 40,
-        min_d: float = 0.5,
-        max_d: float = 12.0,
-        roi_ratio: float = 0.5,
+        conf_th: int = 10,
+        min_d: float = 0.8,
+        max_d: float = 5.0,
+        roi_ratio: float = 0.55,
         ransac_iters: int = 500,
-        ransac_inlier_thresh_m: float = 0.03,
+        ransac_inlier_thresh_m: float = 0.02,
         max_points: int = 50000,
         debug_print: bool = True,
     ):
@@ -98,6 +98,21 @@ class ONNXSlopePipeline:
         # 6) road_mask 생성 (너 설정대로 road_indices=(0)라면)
         # road_mask = (pred_full == 0).astype(np.uint8) * 255
         road_mask = np.isin(pred_full, [0, 1]).astype(np.uint8) * 255
+
+        kernel = np.ones((11, 11), np.uint8)
+        road_mask = cv2.erode(road_mask, kernel, iterations=1)
+
+        kernel = np.ones((9, 9), np.uint8)
+
+        road_mask = cv2.morphologyEx(road_mask, cv2.MORPH_CLOSE, kernel)
+        road_mask = cv2.morphologyEx(road_mask, cv2.MORPH_OPEN, kernel)
+
+        h, w = road_mask.shape
+
+        road_mask[:, : int(w * 0.2)] = 0
+        road_mask[:, int(w * 0.8) :] = 0
+
+        print(f'road_mask : {road_mask}')
 
         # 7) morphology (기존 유지)
         if getattr(self, 'morph_kernel', 0) and self.morph_kernel > 0:

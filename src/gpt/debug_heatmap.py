@@ -84,3 +84,35 @@ def plot_debug_figure(
     plt.close(fig)
 
     return str(out_path)
+
+
+def draw_slope_points(img, valid_mask, inliers_mask, points_3d, save_path=None):
+    """
+    img : 원본 left 이미지
+    valid_mask : (H,W) slope 계산 valid mask
+    inliers_mask : (N,) RANSAC inlier mask
+    points_3d : (N,3) valid 포인트의 3D 좌표
+    """
+
+    vis = img.copy()
+    h, w = valid_mask.shape
+
+    # valid pixel 위치
+    ys, xs = np.where(valid_mask)
+
+    # 파란색 (valid)
+    for x, y in zip(xs, ys):
+        cv2.circle(vis, (x, y), 1, (255, 0, 0), -1)
+
+    # 빨간색 (RANSAC inlier)
+    inlier_idx = np.where(inliers_mask)[0]
+
+    for i in inlier_idx:
+        x = xs[i]
+        y = ys[i]
+        cv2.circle(vis, (x, y), 2, (0, 0, 255), -1)
+
+    if save_path:
+        cv2.imwrite(save_path, vis)
+
+    return vis
