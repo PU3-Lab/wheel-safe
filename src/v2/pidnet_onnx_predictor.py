@@ -3,6 +3,7 @@ import numpy as np
 import onnxruntime as ort
 
 from lib.utils.path import model_path
+from v2.heatmap import plot_heatmap_comparison
 
 
 class PIDNetOnnxPredictor:
@@ -33,9 +34,8 @@ class PIDNetOnnxPredictor:
 
         return img.astype(np.float32)
 
-    def get_road_mask(self, img_path):
+    def get_road_mask(self, img_path, conf_map):
         img_bgr = cv2.imread(str(img_path))
-        print(img_bgr)
         h_orig, w_orig = img_bgr.shape[:2]
 
         # 2. 전처리 및 추론
@@ -49,15 +49,59 @@ class PIDNetOnnxPredictor:
         # 3. Argmax로 클래스 결정
         pred = np.argmax(main_out[0], axis=0).astype(np.uint8)
 
-        # 4. 도로 클래스(0번)만 마스크로 생성
-        # Cityscapes 기준 0번이 도로입니다.
-        road_mask = np.where(pred == 0, 255, 0).astype(np.uint8)
+        pred_full = cv2.resize(pred, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST)
+
+        ROAD_LABEL = 8
+        road_mask = np.where(pred == ROAD_LABEL, 255, 0).astype(np.uint8)
+
+        print(f'road_mask: {np.sum(road_mask)}')
+
+        # [디버깅 추가] 만약 7번도 0개라면, 현재 예측된 값 중 가장 많이 나온 번호를 찾아보세요.
+        if np.sum(road_mask) == 0:
+            unique, counts = np.unique(pred, return_counts=True)
+            # 가장 많이 나타난 클래스 ID 확인 (보통 도로가 면적이 제일 넓음)
+            most_frequent_id = unique[np.argmax(counts)]
+            print(f'가장 넓은 면적의 클래스 ID: {most_frequent_id}')
+            # 임시로 가장 넓은 면적을 도로로 설정해서 경사도가 계산되는지 확인
+            road_mask = np.where(pred == most_frequent_id, 255, 0).astype(np.uint8)
+            # 4. 도로 클래스(0번)만 마스크로 생성
+            # Cityscapes 기준 0번이 도로입니다.
+
+        # road_mask = np.where(pred == 0, 255, 0).astype(np.uint8)
 
         # 원래 이미지 크기로 복원
         road_mask = cv2.resize(
             road_mask, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST
         )
+
+        h, _ = road_mask.shape
+        road_mask[: int(h * 0.25), :] = 0  # 상단 검은 박스 제거
+        road_mask[int(h * 0.85) :, :] = 0  # 하단 검은 박스 제거
+
+        if conf_map is not None:
+            valid_road_mask = (pred_full == 8) & (conf_map > 0.5)
+            pred_full_refined = np.where(valid_road_mask, 8, 0).astype(np.uint8)
+
+            plot_heatmap_comparison(img_bgr, pred_full_refined, conf_map)
+        else:
+            plot_heatmap_comparison(img_bgr, pred_full, conf_map)
+
         return road_mask
+
+    # pidnet_onnx_predictor.py 내부
+    def predict_raw(self, img_path):
+        # 1. 전처리 (2048x1024 등 모델 규격에 맞게)
+        img_bgr = cv2.imread(str(img_path))
+        blob = self.preprocess(img_bgr)
+
+        # 2. ONNX 추론
+        outputs = self.session.run(None, {self.input_name: blob})
+
+        # 3. Argmax로 클래스 ID 추출 (Batch, Channel, H, W -> H, W)
+        # PIDNet의 출력은 보통 [1, 19, H, W] 형태입니다.
+        pred = np.argmax(outputs[0][0], axis=0)
+
+        return pred  # [128, 256] 또는 [512, 1024] 형태의 raw 데이터 반환
 
 
 # --- 사용 예시 ---

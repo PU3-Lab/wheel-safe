@@ -62,6 +62,10 @@ def estimate_road_slope(disp_map, conf_map, road_mask, params):
     v_coords, u_coords = np.where(valid_indices)
     disparities = disp_map[valid_indices]
 
+    # 최종 교집합 확인
+    valid_indices = (road_mask > 0) & (conf_map > 0.8) & (disp_map > 0.1)
+    print(f'마스크 실제 데이터 값 종류: {np.unique(road_mask)}')
+
     if len(disparities) < 100:  # 샘플 수가 너무 적으면 계산 불가
         return None, None
 
