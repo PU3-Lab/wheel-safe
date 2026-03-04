@@ -1,76 +1,158 @@
+from __future__ import annotations
+
 import configparser
+from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import cv2
 import numpy as np
 
 
+@dataclass
+class CameraParams:
+    fx: float
+    fy: float
+    cx: float
+    cy: float
+    baseline_m: float
+    rx_pitch_rad: float | None = None  # optional
+
+
 class SlopeAggregator:
     """
-    Disparity16 (scaled by 16) + confidence map => estimate ground slope.
-
-    Key improvements vs. original:
-    - Do NOT clamp invalid disparity to tiny values (prevents Z explosion).
-    - Build valid mask first, then sample valid points for geometry.
-    - Use RANSAC plane fitting on 3D points for a stable ground normal.
-    - Provide per-pixel slope map as angle between per-pixel normal and vertical (optional),
-      and also a "plane slope map" w.r.t. the estimated ground plane.
+    Depth_*.conf에서 카메라 파라미터 로드
+    disp16 + confidence_save + external_mask로 valid 생성
+    1) (권장) Y-Z 선형 RANSAC: Y = a*Z + b  -> slope = atan(a)
+    2) (디버그/백업) 3D plane RANSAC: n·p + d = 0 -> slope from normal vs vertical
     """
 
     def __init__(
         self,
-        conf_path: str | None = None,
-        mode: str = 'LEFT_CAM_FHD',
         *,
-        # If you use cropped images (e.g., 1920x592 from 1920x1080),
-        # and your cx, cy are for the original image, set crop offsets:
-        crop_x: int = 0,
-        crop_y: int = 0,
+        config_path: str | Path,
+        mode: str = 'LEFT_CAM_FHD',
+        stereo_section: str = 'STEREO',
+        # disp16 scale
+        disp_scale: float = 16.0,
+        # filters
+        conf_th: int = 40,
+        min_d: float = 1.0,
+        max_d: float = 8.0,
+        roi_ratio: float = 0.35,
+        # ransac
+        ransac_iters: int = 500,
+        ransac_inlier_thresh_m: float = 0.05,  # for plane (meters)
+        yz_inlier_thresh_m: float = 0.05,  # for YZ line (meters)
+        max_points: int = 50000,
+        debug_print: bool = True,
     ):
-        # Defaults (override via .conf)
-        self.fx, self.fy = 1400.15, 1400.15
-        self.cx, self.cy = 943.093, 559.187
-        self.baseline = 0.12  # meters
+        self.config_path = Path(config_path)
+        self.mode = mode
+        self.stereo_section = stereo_section
 
-        # Analysis params
-        self.conf_threshold = 230
-        self.min_dist = 0.8
-        self.max_dist = 10.0
-        self.roi_ratio = 0.35
+        self.disp_scale = float(disp_scale)
 
-        # RANSAC params
-        self.ransac_iters = 400
-        self.ransac_inlier_thresh = 0.03  # meters (3cm)
-        self.max_points = 60_000  # sample cap for speed
+        self.conf_th = int(conf_th)
+        self.min_d = float(min_d)
+        self.max_d = float(max_d)
+        self.roi_ratio = float(roi_ratio)
 
-        # Crop offsets (principal point shift)
-        self.crop_x = int(crop_x)
-        self.crop_y = int(crop_y)
+        self.ransac_iters = int(ransac_iters)
+        self.ransac_inlier_thresh_m = float(ransac_inlier_thresh_m)
+        self.yz_inlier_thresh_m = float(yz_inlier_thresh_m)
+        self.max_points = int(max_points)
 
-        if conf_path and Path(conf_path).exists():
-            self._load_config(conf_path, mode)
+        self.debug_print = bool(debug_print)
 
-    def _load_config(self, conf_path, mode):
-        config = configparser.ConfigParser()
-        try:
-            config.read(conf_path)
+        self.cam = self._load_camera_params(
+            self.config_path, self.mode, self.stereo_section
+        )
 
-            if mode in config:
-                self.fx = float(config[mode]['fx'])
-                self.fy = float(config[mode]['fy'])
-                self.cx = float(config[mode]['cx'])
-                self.cy = float(config[mode]['cy'])
+    # -------------------------
+    # Config parsing
+    # -------------------------
+    def _load_camera_params(
+        self, conf_path: Path, mode: str, stereo_section: str
+    ) -> CameraParams:
+        if not conf_path.exists():
+            raise FileNotFoundError(f'config not found: {conf_path}')
 
-            if 'STEREO' in config and 'BaseLine' in config['STEREO']:
-                # mm -> m
-                self.baseline = float(config['STEREO']['BaseLine']) / 1000.0
+        cfg = configparser.ConfigParser()
+        cfg.read(conf_path)
 
-        except Exception as e:
-            print(f'설정 로드 실패: {e}')
+        if mode not in cfg:
+            raise KeyError(
+                f'mode section not found in conf: {mode} (available: {list(cfg.sections())})'
+            )
+        if stereo_section not in cfg:
+            raise KeyError(f'stereo section not found in conf: {stereo_section}')
 
+        fx = float(cfg[mode]['fx'])
+        fy = float(cfg[mode].get('fy', cfg[mode]['fx']))
+        cx = float(cfg[mode].get('cx', 0.0))
+        cy = float(cfg[mode]['cy'])
+
+        baseline_raw = float(cfg[stereo_section]['BaseLine'])
+        baseline_m = baseline_raw / 1000.0 if baseline_raw > 10 else baseline_raw
+
+        rx_key = None
+        for k in ('RX_FHD', 'RX_2K', 'RX_HD', 'RX_VGA'):
+            if k in cfg[stereo_section]:
+                rx_key = k
+                break
+        rx_pitch = float(cfg[stereo_section][rx_key]) if rx_key else None
+
+        return CameraParams(
+            fx=fx,
+            fy=fy,
+            cx=cx,
+            cy=cy,
+            baseline_m=baseline_m,
+            rx_pitch_rad=rx_pitch,
+        )
+
+    # -------------------------
+    # IO
+    # -------------------------
+    def _read_disp(self, disp_path: str | Path) -> np.ndarray:
+        disp16 = cv2.imread(str(disp_path), cv2.IMREAD_UNCHANGED)
+        if disp16 is None:
+            raise RuntimeError(f'Failed to read disparity: {disp_path}')
+        return disp16.astype(np.float32) / self.disp_scale
+
+    def _read_conf_img(self, conf_img_path: str | Path) -> np.ndarray:
+        conf = cv2.imread(str(conf_img_path), cv2.IMREAD_UNCHANGED)
+        if conf is None:
+            raise RuntimeError(f'Failed to read confidence image: {conf_img_path}')
+        if conf.ndim == 3:
+            conf = cv2.cvtColor(conf.astype(np.uint8), cv2.COLOR_BGR2GRAY)
+        if conf.dtype != np.uint8:
+            conf = np.clip(conf, 0, 255).astype(np.uint8)
+        return conf
+
+    # -------------------------
+    # Geometry
+    # -------------------------
+    def _make_3d(self, disp: np.ndarray):
+        """
+        disp: (H,W) float disparity (pixels)
+        returns X,Y,Z in meters
+        """
+        h, w = disp.shape
+        u = np.arange(w, dtype=np.float32)[None, :]
+        v = np.arange(h, dtype=np.float32)[:, None]
+
+        Z = (self.cam.fx * self.cam.baseline_m) / np.maximum(disp, 1e-6)
+        Z[disp <= 0] = np.inf
+
+        X = (u - self.cam.cx) * Z / self.cam.fx
+        Y = (v - self.cam.cy) * Z / self.cam.fy
+        return X.astype(np.float32), Y.astype(np.float32), Z.astype(np.float32)
+
+    # ----- Plane RANSAC (디버그/백업) -----
     @staticmethod
     def _plane_from_3pts(p1, p2, p3):
-        """Return (n, d) for plane n·x + d = 0, with |n|=1. If degenerate, return None."""
         v1 = p2 - p1
         v2 = p3 - p1
         n = np.cross(v1, v2)
@@ -82,25 +164,18 @@ class SlopeAggregator:
         return n, d
 
     @staticmethod
-    def _point_plane_dist(points, n, d):
-        """Signed distance."""
+    def _dist_to_plane(points: np.ndarray, n: np.ndarray, d: float) -> np.ndarray:
         return points @ n + d
 
-    def _ransac_plane(self, points):
-        """
-        Fit a plane using RANSAC.
-        points: (N,3)
-        return: best_n, best_d, inlier_mask
-        """
+    def _ransac_plane(self, points: np.ndarray):
         N = points.shape[0]
-        if N < 200:
+        if N < 300:
             return None, None, None
 
-        # Random sampling indices
         rng = np.random.default_rng(42)
+        best_model = None
         best_inliers = None
         best_count = 0
-        best_model = None
 
         for _ in range(self.ransac_iters):
             idx = rng.choice(N, size=3, replace=False)
@@ -108,17 +183,10 @@ class SlopeAggregator:
             model = self._plane_from_3pts(p1, p2, p3)
             if model is None:
                 continue
-
             n, d = model
 
-            # Prefer "ground-like" planes: normal should be reasonably close to vertical
-            # (vertical axis defined as (0,-1,0) in your coordinate convention)
-            vertical = np.array([0.0, -1.0, 0.0], dtype=np.float32)
-            if abs(float(np.dot(n, vertical))) < np.cos(np.radians(55)):  # too wall-ish
-                continue
-
-            dist = np.abs(self._point_plane_dist(points, n, d))
-            inliers = dist < self.ransac_inlier_thresh
+            dist = np.abs(self._dist_to_plane(points, n, d))
+            inliers = dist < self.ransac_inlier_thresh_m
             count = int(inliers.sum())
 
             if count > best_count:
@@ -129,213 +197,294 @@ class SlopeAggregator:
         if best_model is None or best_inliers is None or best_count < 300:
             return None, None, None
 
-        # Refit using least squares on inliers (SVD)
-        inlier_pts = points[best_inliers]
-        centroid = inlier_pts.mean(axis=0)
-        Q = inlier_pts - centroid
+        # refine
+        P = points[best_inliers]
+        centroid = P.mean(axis=0)
+        Q = P - centroid
         _, _, vh = np.linalg.svd(Q, full_matrices=False)
-        n = vh[-1, :]
+        n = vh[-1]
         n = n / (np.linalg.norm(n) + 1e-9)
         d = -float(np.dot(n, centroid))
 
-        # Make normal point "upwards-ish" (match vertical sign convention)
-        vertical = np.array([0.0, -1.0, 0.0], dtype=np.float32)
-        if float(np.dot(n, vertical)) < 0:
-            n = -n
-            d = -d
+        # final inliers
+        dist = np.abs(self._dist_to_plane(points, n, d))
+        inliers = dist < self.ransac_inlier_thresh_m
 
-        return n.astype(np.float32), float(d), best_inliers
+        return n.astype(np.float32), float(d), inliers
 
-    def calculate_slope(self, disp16_path, conf_path, external_mask=None):
-        disp16_raw = cv2.imread(str(disp16_path), cv2.IMREAD_UNCHANGED)
-        conf_raw = cv2.imread(str(conf_path), cv2.IMREAD_GRAYSCALE)
+    # ----- YZ Line RANSAC (권장) -----
+    def _ransac_line_yz(self, yz: np.ndarray):
+        """
+        Robust fit for Y = a*Z + b using RANSAC.
+        yz: (N,2) columns [Y, Z]
+        returns: a, b, inliers_mask (N,)
+        """
+        N = yz.shape[0]
+        if N < 300:
+            return None, None, None
 
-        if disp16_raw is None or conf_raw is None:
-            return {
-                'avg_slope': 0.0,
-                'slope_map_roi': None,
-                'valid_mask': None,
-                'roi_y_range': None,
-            }
+        Y = yz[:, 0].astype(np.float32)
+        Z = yz[:, 1].astype(np.float32)
 
-        # Confidence binary mask
-        _, conf_mask = cv2.threshold(
-            conf_raw, self.conf_threshold, 255, cv2.THRESH_BINARY
+        rng = np.random.default_rng(42)
+        best_inliers = None
+        best_count = 0
+
+        thr = float(self.yz_inlier_thresh_m)
+
+        for _ in range(self.ransac_iters):
+            i1, i2 = rng.choice(N, size=2, replace=False)
+            z1, y1 = float(Z[i1]), float(Y[i1])
+            z2, y2 = float(Z[i2]), float(Y[i2])
+
+            dz = z2 - z1
+            if abs(dz) < 1e-4:
+                continue
+
+            a = (y2 - y1) / dz
+            b = y1 - a * z1
+
+            residual = np.abs(Y - (a * Z + b))
+            inliers = residual < thr
+            count = int(inliers.sum())
+
+            if count > best_count:
+                best_count = count
+                best_inliers = inliers
+
+        if best_inliers is None or best_count < 300:
+            return None, None, None
+
+        # refine LS on inliers
+        Zi = Z[best_inliers]
+        Yi = Y[best_inliers]
+        A = np.column_stack([Zi, np.ones_like(Zi)])
+        (a_ls, b_ls), *_ = np.linalg.lstsq(A, Yi, rcond=None)
+
+        # final inliers against refit
+        residual = np.abs(Y - (a_ls * Z + b_ls))
+        final_inliers = residual < thr
+
+        return float(a_ls), float(b_ls), final_inliers
+
+    # -------------------------
+    # Main
+    # -------------------------
+    def calculate_slope(
+        self,
+        disp_path: str | Path,
+        conf_img_path: str | Path,
+        external_mask: np.ndarray | None = None,
+    ) -> dict:
+        disp = self._read_disp(disp_path)
+        conf = self._read_conf_img(conf_img_path)
+
+        h, w = disp.shape
+
+        # ROI (bottom)
+        y0 = int(h * (1.0 - self.roi_ratio))
+        roi = np.zeros((h, w), dtype=bool)
+        roi[y0:, :] = True
+
+        # dist
+        dist = (self.cam.fx * self.cam.baseline_m) / np.maximum(disp, 1e-6)
+        dist[disp <= 0] = np.inf
+
+        # valid
+        valid = (
+            roi
+            & (disp > 0)
+            & (conf >= self.conf_th)
+            & np.isfinite(dist)
+            & (dist > self.min_d)
+            & (dist < self.max_d)
         )
 
-        # Smooth disparity a bit (median can be okay; keep small to preserve edges)
-        disp16_filtered = cv2.medianBlur(disp16_raw, 5)
-
-        h, w = disp16_filtered.shape[:2]
-        roi_v_start = h - int(h * self.roi_ratio)
-        roi_v_end = h
-
-        disp_roi = disp16_filtered[roi_v_start:roi_v_end, :].astype(np.float32)
-        conf_roi = conf_mask[roi_v_start:roi_v_end, :]
-
-        # Disparity (scaled by 16)
-        d = disp_roi / 16.0
-
-        # Build validity BEFORE computing Z/geometry
-        valid = (conf_roi > 0) & (d > 0.5)  # disparity > 0.5px as a sane minimum
-
-        # Build validity BEFORE computing Z/geometry
-        valid_conf = conf_roi > 0
-        valid_disp = d > 0.5
-        valid = valid_conf & valid_disp
-
-        print('[DEBUG] ROI shape:', disp_roi.shape)
-        print('[DEBUG] conf_raw min/max:', int(conf_raw.min()), int(conf_raw.max()))
-        print('[DEBUG] conf_roi>0 ratio:', float(valid_conf.mean()))
-        print('[DEBUG] d min/max:', float(np.nanmin(d)), float(np.nanmax(d)))
-        print('[DEBUG] d>0.5 ratio:', float(valid_disp.mean()))
-        print('[DEBUG] valid (before ext mask) ratio:', float(valid.mean()))
-
+        # external mask
+        em_ratio = 0.0
         if external_mask is not None:
-            if external_mask.shape[:2] != (h, w):
-                ext = cv2.resize(external_mask, (w, h), interpolation=cv2.INTER_NEAREST)
-            else:
-                ext = external_mask
-
-            model_mask_roi = ext[roi_v_start:roi_v_end, :] > 0
-            print('[DEBUG] ext mask roi>0 ratio:', float(model_mask_roi.mean()))
-
-            valid &= model_mask_roi
-            print('[DEBUG] valid (after ext mask) ratio:', float(valid.mean()))
-        else:
-            print('[DEBUG] external_mask: None')
-
-        if external_mask is not None:
-            # 1) 외부 마스크가 disp/conf와 같은 해상도인지 확인
-            if external_mask.shape[:2] != (h, w):
-                # segmentation이 다른 해상도에서 왔을 가능성 대비
-                ext = cv2.resize(
-                    external_mask,
-                    (w, h),
-                    interpolation=cv2.INTER_NEAREST,
+            em = external_mask
+            if em.ndim == 3:
+                em = cv2.cvtColor(em.astype(np.uint8), cv2.COLOR_BGR2GRAY)
+            if em.shape[:2] != (h, w):
+                em = cv2.resize(
+                    em.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST
                 )
-            else:
-                ext = external_mask
+            em = em > 0
+            em_ratio = float(em.mean())
+            valid &= em
 
-        # 2) ROI에 맞춰 자르고, 0/1 이든 0/255든 상관없이 처리
-        model_mask_roi = ext[roi_v_start:roi_v_end, :] > 0
-        valid &= model_mask_roi
+        stats = {
+            'fx': self.cam.fx,
+            'fy': self.cam.fy,
+            'cx': self.cam.cx,
+            'cy': self.cam.cy,
+            'baseline_m': self.cam.baseline_m,
+            'disp_scale': self.disp_scale,
+            'roi_ratio': float(roi.mean()),
+            'conf_th': self.conf_th,
+            'min_d': self.min_d,
+            'max_d': self.max_d,
+            'conf_ratio': float((conf >= self.conf_th).mean()),
+            'disp_ratio': float((disp > 0).mean()),
+            'dist_ratio': float(((dist > self.min_d) & (dist < self.max_d)).mean()),
+            'external_mask_ratio': em_ratio,
+            'final_valid_ratio': float(valid.mean()),
+            'final_valid_count': int(valid.sum()),
+            'slope_method': 'none',
+            'yz_a': None,
+            'yz_b': None,
+            'yz_inlier_ratio': None,
+            'plane_normal': None,
+            'plane_d': None,
+            'ransac_inlier_ratio': None,
+            'ransac_fit_points': 0,
+            'plane_avg': None,
+            'plane_signed': None,
+        }
 
-        if not np.any(valid):
+        if self.debug_print:
+            print('[SLOPE] stats:', stats)
+
+        if cast(int, stats['final_valid_count']) < 2000:
             return {
-                'avg_slope': 0.0,
-                'slope_map_roi': np.zeros_like(d, dtype=np.float32),
-                'valid_mask': valid,
-                'roi_y_range': (roi_v_start, roi_v_end),
+                'avg_slope': float('nan'),
+                'signed_slope': float('nan'),
+                'reason': 'valid too sparse',
+                'stats': stats,
+                'valid': valid,
+                'plane_normal': None,
+                'plane_d': None,
+                'inliers_mask': None,
+                'yz_inliers_mask': None,
             }
 
-        # Depth (meters) only for valid pixels
-        Z = np.full_like(d, np.nan, dtype=np.float32)
-        Z[valid] = (self.fx * self.baseline) / d[valid]
+        # 3D points
+        X, Y, Z = self._make_3d(disp)
+        pts = np.column_stack([X[valid], Y[valid], Z[valid]]).astype(np.float32)
 
-        # Distance filtering
-        valid &= np.isfinite(Z) & (self.min_dist < Z) & (self.max_dist > Z)
-        if not np.any(valid):
-            return {
-                'avg_slope': 0.0,
-                'slope_map_roi': np.zeros_like(d, dtype=np.float32),
-                'valid_mask': valid,
-                'roi_y_range': (roi_v_start, roi_v_end),
-            }
-
-        # Pixel grid (note: apply crop offsets to principal point if needed)
-        # If cx,cy come from original image but you're using a crop, set crop_y accordingly.
-        cx = self.cx - self.crop_x
-        cy = self.cy - self.crop_y
-
-        u, v = np.meshgrid(
-            np.arange(w, dtype=np.float32),
-            np.arange(roi_v_start, roi_v_end, dtype=np.float32),
-        )
-
-        # 3D reconstruction for valid pixels only
-        X = np.full_like(Z, np.nan, dtype=np.float32)
-        Y = np.full_like(Z, np.nan, dtype=np.float32)
-        X[valid] = (u[valid] - cx) * Z[valid] / self.fx
-        Y[valid] = (v[valid] - cy) * Z[valid] / self.fy
-
-        # Collect points for RANSAC
-        pts = np.stack([X[valid], Y[valid], Z[valid]], axis=1)
-
-        # Subsample for speed
+        # subsample for speed
         if pts.shape[0] > self.max_points:
             rng = np.random.default_rng(0)
-            idx = rng.choice(pts.shape[0], size=self.max_points, replace=False)
-            pts_fit = pts[idx]
+            sel = rng.choice(pts.shape[0], size=self.max_points, replace=False)
+            pts_fit = pts[sel]
         else:
             pts_fit = pts
 
-        n, d_plane, inliers = self._ransac_plane(pts_fit)
+        # ------------------------------------------------------
+        # (1) Y-Z line RANSAC (권장)
+        # ------------------------------------------------------
+        yz = np.column_stack([pts_fit[:, 1], pts_fit[:, 2]])  # [Y, Z]
+        a_yz, b_yz, yz_inliers = self._ransac_line_yz(yz)
 
-        if n is None:
-            # Fallback: simple median normal from local gradients (rough)
-            # (kept minimal; better to rely on RANSAC)
-            avg_slope = 0.0
-            slope_map = np.zeros_like(d, dtype=np.float32)
-            return {
-                'avg_slope': avg_slope,
-                'slope_map_roi': slope_map,
-                'valid_mask': valid,
-                'roi_y_range': (roi_v_start, roi_v_end),
-                'plane_normal': None,
+        yz_signed = None
+        yz_avg = None
+        yz_inlier_ratio = None
+        if a_yz is not None:
+            # dy/dz = a_yz
+            # Y가 아래로 증가한다는 좌표계에서 "오르막=+"로 맞추기 위해 부호 뒤집음
+            yz_signed = -float(np.degrees(np.arctan(a_yz)))
+            yz_avg = float(abs(yz_signed))
+            yz_inlier_ratio = float(yz_inliers.mean())
+
+        stats.update(
+            {
+                'yz_a': a_yz,
+                'yz_b': b_yz,
+                'yz_inlier_ratio': yz_inlier_ratio,
+                'yz_inlier_thresh_m': float(self.yz_inlier_thresh_m),
             }
+        )
 
-        # Ground slope angle: angle between plane normal and vertical
-        vertical = np.array([0.0, -1.0, 0.0], dtype=np.float32)
-        cos_nv = np.clip(abs(float(np.dot(n, vertical))), 0.0, 1.0)
-        avg_slope = float(np.degrees(np.arccos(cos_nv)))  # 0° flat, bigger = steeper
+        # ------------------------------------------------------
+        # (2) Plane RANSAC (디버그/백업 유지)
+        # ------------------------------------------------------
+        n, d, inliers = self._ransac_plane(pts_fit)
 
-        # --- slope map (ROI) ---
-        # Option 1 (recommended): per-pixel "plane deviation" angle:
-        # angle between (estimated ground normal) and per-pixel normal is expensive.
-        # Instead we make a simple "height residual" map OR a plane-based pseudo slope.
-        #
-        # Here: make a "plane residual" (meters) -> convert to pseudo angle by local scale is non-trivial,
-        # so we provide a simpler and more interpretable map:
-        # per-pixel "vertical slope" using depth gradients on a filled Z.
+        plane_avg = None
+        plane_signed = None
+        if n is not None:
+            # normal 방향 통일: ny < 0 (vertical = [0,-1,0] 기준)
+            if float(n[1]) > 0:
+                n = -n
+                d = -d
 
-        # Fill NaNs in Z for gradient (inpaint requires 8-bit; use nearest fill)
-        Z_fill = Z.copy()
-        if np.any(~np.isfinite(Z_fill)):
-            # nearest neighbor fill using distance transform
-            mask_nan = (~np.isfinite(Z_fill)).astype(np.uint8)
-            # Need finite pixels for distance transform; if too sparse, keep zeros
-            if np.any(np.isfinite(Z_fill)):
-                Z0 = Z_fill.copy()
-                Z0[~np.isfinite(Z0)] = 0.0
-                dist, labels = cv2.distanceTransformWithLabels(
-                    mask_nan,
-                    distanceType=cv2.DIST_L2,
-                    maskSize=5,
-                    labelType=cv2.DIST_LABEL_PIXEL,
-                )
-                labels = labels - 1
-                # map labels -> nearest finite pixel coords
-                coords = np.column_stack(np.where(np.isfinite(Z_fill)))
-                # guard
-                if coords.shape[0] > 0:
-                    nearest = coords[np.clip(labels, 0, coords.shape[0] - 1)]
-                    Z_fill[mask_nan.astype(bool)] = Z_fill[nearest[:, 0], nearest[:, 1]]
+            vertical = np.array([0.0, -1.0, 0.0], dtype=np.float32)
+            cos_theta = np.clip(np.abs(float(np.dot(n, vertical))), 0.0, 1.0)
+            plane_avg = float(np.degrees(np.arccos(cos_theta)))
 
-        dz_dv, dz_du = np.gradient(Z_fill)
+            eps = 1e-6
+            dy_dz = -float(n[2]) / (float(n[1]) + eps)
+            # 오르막=+ 맞추기 위해 부호 뒤집음 (YZ 방식과 동일 기준)
+            plane_signed = -float(np.degrees(np.arctan(dy_dz)))
 
-        # Approx local surface slope angle from depth gradients (small-angle approx in camera space is imperfect,
-        # but works as a stable "steepness" heatmap when masked to valid ground region)
-        # Convert gradient magnitude to angle: tan(theta) ~ |grad(Z)|
-        grad_mag = np.sqrt(dz_du**2 + dz_dv**2)
-        slope_map = np.degrees(np.arctan(grad_mag)).astype(np.float32)
-        slope_map[~valid] = 0.0
+            stats.update(
+                {
+                    'plane_normal': [float(x) for x in n],
+                    'plane_d': float(d),
+                    'ransac_inlier_ratio': float(inliers.mean())
+                    if inliers is not None
+                    else None,
+                    'ransac_fit_points': int(pts_fit.shape[0]),
+                    'plane_avg': plane_avg,
+                    'plane_signed': plane_signed,
+                    'plane_inlier_thresh_m': float(self.ransac_inlier_thresh_m),
+                }
+            )
+        else:
+            stats.update(
+                {
+                    'plane_normal': None,
+                    'plane_d': None,
+                    'ransac_inlier_ratio': None,
+                    'ransac_fit_points': int(pts_fit.shape[0]),
+                    'plane_avg': None,
+                    'plane_signed': None,
+                    'plane_inlier_thresh_m': float(self.ransac_inlier_thresh_m),
+                }
+            )
+
+        # ------------------------------------------------------
+        # 최종 slope 선택: YZ가 있으면 YZ 우선, 아니면 plane
+        # ------------------------------------------------------
+        if yz_avg is not None and np.isfinite(yz_avg):
+            avg = yz_avg
+            signed = yz_signed
+            reason = 'ok'
+            stats['slope_method'] = 'yz_line_ransac'
+        elif plane_avg is not None and np.isfinite(plane_avg):
+            avg = plane_avg
+            signed = plane_signed
+            reason = 'ok(plane_fallback)'
+            stats['slope_method'] = 'plane_ransac'
+        else:
+            avg = float('nan')
+            signed = float('nan')
+            reason = 'fit failed'
+            stats['slope_method'] = None
+
+        if self.debug_print:
+            print(
+                '[SLOPE] method:',
+                stats.get('slope_method'),
+                'yz_inlier:',
+                stats.get('yz_inlier_ratio'),
+                'plane_inlier:',
+                stats.get('ransac_inlier_ratio'),
+            )
 
         return {
-            'avg_slope': avg_slope,
-            'slope_map_roi': slope_map,
-            'valid_mask': valid,
-            'roi_y_range': (roi_v_start, roi_v_end),
-            'plane_normal': n,
-            'plane_d': d_plane,
+            'avg_slope': float(avg) if np.isfinite(avg) else float('nan'),
+            'signed_slope': float(signed)
+            if signed is not None and np.isfinite(signed)
+            else float('nan'),
+            'reason': reason,
+            'stats': stats,
+            'valid': valid,
+            # plane debug
+            'plane_normal': stats.get('plane_normal'),
+            'plane_d': stats.get('plane_d'),
+            'inliers_mask': inliers,
+            # yz debug
+            'yz_inliers_mask': yz_inliers,
         }
