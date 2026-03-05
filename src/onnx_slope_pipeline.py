@@ -6,7 +6,7 @@ import numpy as np
 import onnxruntime as ort
 from pyprojroot import here
 
-from slope_aggregator import GlobalSlopeAggregator
+from slope_aggregator_old import GlobalSlopeAggregator
 
 # 위에서 정의한 GlobalSlopeAggregator 클래스가 같은 파일에 있거나 import 되었다고 가정합니다.
 
