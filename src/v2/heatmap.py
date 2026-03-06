@@ -3,48 +3,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def plot_heatmap_comparison(img_left, pred, conf_map):
-    """
-    img_left: 원본 왼쪽 이미지 (BGR, 1920x1080)
-    pred: PIDNet 결과 (128x256 등 작은 사이즈)
-    """
-    # 1. 원본 이미지 크기 파악 (1080, 1920)
+def plot_heatmap_comparison(img_left, pred):
     h_orig, w_orig = img_left.shape[:2]
     img_rgb = cv2.cvtColor(img_left, cv2.COLOR_BGR2RGB)
 
-    # 2. 모델 출력(pred)을 원본 크기로 리사이즈 (Upsampling)
-    # 클래스 ID 보존을 위해 INTER_NEAREST 방식을 사용합니다.
-    pred_resized = cv2.resize(pred, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST)
-
-    pred_refined = np.where(conf_map > 0.5, pred_resized, 0)
-
-    # 3. 시각화 설정
     fig, axes = plt.subplots(1, 2, figsize=(24, 10))  # 가로로 길게 설정
 
-    # 왼쪽: 원본 이미지
     axes[0].imshow(img_rgb)
     axes[0].set_title(f'Original Image ({w_orig}x{h_orig})')
     axes[0].axis('off')
 
-    # 오른쪽: 원본 크기로 맞춘 히트맵
-    im = axes[1].imshow(pred_refined, cmap='tab20')
+    im = axes[1].imshow(pred, cmap='tab20')
     axes[1].set_title(f'Full-Size Heatmap ({w_orig}x{h_orig})')
 
-    # 컬러바 추가
-    cbar = fig.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
-    cbar.set_label('Class ID')
-
-    # 특정 위치 ID 표시 (도로 영역)
-    road_id = pred_resized[int(h_orig * 0.8), int(w_orig * 0.5)]
-    axes[1].text(
-        w_orig * 0.5,
-        h_orig * 0.8,
-        f'Road? ID:{road_id}',
-        color='white',
-        weight='bold',
-        fontsize=15,
-        bbox={'facecolor': 'black', 'alpha': 0.5},
-    )
+    fig.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
 
     plt.tight_layout()
     plt.show()

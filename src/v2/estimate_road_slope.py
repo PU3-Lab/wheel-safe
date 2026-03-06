@@ -42,29 +42,15 @@ def get_calibrated_slope(disp, conf, mask, config_path, res='2K'):
         # (주의: 좌표계 방향에 따라 더할지 뺄지는 테스트가 필요함)
         actual_road_slope = raw_angle - params['pitch_deg']
         return actual_road_slope
+
     return None
 
 
 def estimate_road_slope(disp_map, conf_map, road_mask, params):
-    """
-    disp_map: 시차 이미지 (float32)
-    conf_map: 신뢰도 이미지 (0~1 범위 가정)
-    road_mask: PIDNet 도로 세그멘테이션 마스크 (도로 영역=255)
-    params: 카메라 캘리브레이션 파라미터
-    """
+    # valid_indices = (road_mask == 255) & (conf_map > 0.9) & (disp_map > 0.5)
 
-    # 1. 유효한 데이터 포인트 필터링
-    # - 도로 마스크 영역 내부
-    # - 신뢰도가 일정 수준(예: 0.9) 이상
-    # - 시차(disparity) 값이 유효한(0보다 큰) 경우
-    valid_indices = (road_mask == 255) & (conf_map > 0.9) & (disp_map > 0.5)
-
-    v_coords, u_coords = np.where(valid_indices)
-    disparities = disp_map[valid_indices]
-
-    # 최종 교집합 확인
-    valid_indices = (road_mask > 0) & (conf_map > 0.8) & (disp_map > 0.1)
-    print(f'마스크 실제 데이터 값 종류: {np.unique(road_mask)}')
+    v_coords, u_coords = np.where(road_mask)
+    disparities = disp_map[road_mask]
 
     if len(disparities) < 100:  # 샘플 수가 너무 적으면 계산 불가
         return None, None
