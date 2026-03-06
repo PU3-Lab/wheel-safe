@@ -4,11 +4,14 @@ import torch
 import torch.nn.functional as F
 
 import models.pidnet as pidnet
+from lib.utils.device import get_device
 from lib.utils.path import model_path
+
+device = get_device()
 
 
 def load_pretrained(model, pretrained):
-    pretrained_dict = torch.load(pretrained, map_location='cpu')
+    pretrained_dict = torch.load(pretrained, map_location=device)
     if 'state_dict' in pretrained_dict:
         pretrained_dict = pretrained_dict['state_dict']
     model_dict = model.state_dict()
@@ -34,7 +37,7 @@ def create_model():
 
     load_pretrained(model, checkpoint_path)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('class', model.__class__)
     # checkpoint = torch.load(checkpoint_path, map_location=device)
 
     # if 'state_dict' in checkpoint:
@@ -49,7 +52,7 @@ def create_model():
     return model
 
 
-def preprocess_image(img_path, device='cuda'):
+def preprocess_image(img_path, device):
     # 1. 이미지 로드 (BGR -> RGB 변환 필수)
     img_bgr = cv2.imread(img_path, cv2.IMREAD_COLOR)
     if img_bgr is None:
@@ -66,10 +69,8 @@ def preprocess_image(img_path, device='cuda'):
     img = (img - mean) / std
 
     # 3. HWC (Height, Width, Channel) -> CHW (Channel, Height, Width)
-    img = img.transpose((2, 0, 1))
-
-    # 4. Tensor 변환 및 배치 차원 추가 (1, C, H, W)
-    img_tensor = torch.from_numpy(img).unsqueeze(0).to(device).float()
+    img = img.transpose((2, 0, 1)).astype(np.float32)
+    img_tensor = torch.from_numpy(img).unsqueeze(0).to(device)
 
     return img_tensor, img_bgr.shape[:2]  # 원본 크기도 함께 반환 (Interpolate용)
 
@@ -82,5 +83,15 @@ def postprocess_output(pred, org_size):
 
     pred = F.interpolate(pred, size=org_size, mode='bilinear', align_corners=True)
     pred_index = torch.argmax(pred, dim=1).squeeze(0).cpu().numpy()
+
+    unique, counts = torch.unique(torch.from_numpy(pred_index), return_counts=True)
+    index_counts = dict(zip(unique.tolist(), counts.tolist()))
+
+    # 3. 빈도수 순으로 정렬 (보통 길이나 하늘이 가장 넓음)
+    sorted_indices = sorted(index_counts.items(), key=lambda x: x[1], reverse=True)
+
+    print('면적이 넓은 순서대로 인덱스 확인:')
+    for idx, count in sorted_indices:
+        print(f'인덱스 {idx}: {count} 픽셀')
 
     return pred_index

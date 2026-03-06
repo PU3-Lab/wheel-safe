@@ -1,6 +1,8 @@
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
+import torch.nn.functional as F
 
 
 def plot_heatmap_comparison(img_left, pred, mask):
@@ -84,6 +86,8 @@ class_names = [
     'bicycle',
 ]
 
+mask_index = list(map(str, range(19)))
+
 
 def show_heatmap(pred_index, title='Segmentation Index Heatmap'):
     plt.figure(figsize=(15, 8))
@@ -109,7 +113,7 @@ def show_heatmap(pred_index, title='Segmentation Index Heatmap'):
     plt.show()
 
 
-def compare_results(img_path, pred_index):
+def compare_results(img_path, pred_index, color_map):
     # 1. 이미지 로드 (문자열 경로가 들어올 경우 대비)
     orig_img = cv2.imread(img_path)
     orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
@@ -130,11 +134,152 @@ def compare_results(img_path, pred_index):
     # 4. 컬러바 추가 (im 객체를 명시적으로 지정)
     cbar = fig.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
     cbar.set_ticks(range(19))
-    cbar.set_ticklabels(class_names)
+    cbar.set_ticklabels(mask_index)
 
     plt.tight_layout()
     plt.show()
 
+
+def visualize_mask_1(img_path, pred_index, labels):
+    # 1. 1번 인덱스만 추출 (Boolean Mask)
+    image = cv2.imread(img_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    mask_1 = np.isin(pred_index, labels)
+
+    # 2. 시각화를 위해 원본 이미지 복사
+    overlay = image.copy()
+
+    # 3. 1번 영역에만 특정 색상(예: 밝은 하늘색) 채우기
+    # [R, G, B] 순서 (0~255)
+    overlay[mask_1] = [0, 255, 255]
+
+    # 4. 원본과 마스크를 적절히 합성 (Alpha Blending)
+    alpha = 0.4
+    combined = ((1 - alpha) * image + alpha * overlay).astype(np.uint8)
+
+    # 5. 결과 출력
+    plt.figure(figsize=(20, 10))
+    plt.subplot(1, 2, 1)
+    plt.title('Original Image')
+    plt.imshow(image)
+    plt.axis('off')
+
+    plt.subplot(1, 2, 2)
+    plt.title('Index 1 Mask Highlight')
+    plt.imshow(combined)
+    plt.axis('off')
+
+    plt.show()
+
+
+def visualize_road_report(img_path, output, palette):
+    image = cv2.imread(img_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # --- 0. 전처리 및 예측값 추출 ---
+    # output: [1, C, H, W], image: [H, W, 3]
+    probs = F.softmax(output, dim=1)
+    conf, pred = torch.max(probs, dim=1)
+
+    pred = pred[0].cpu().numpy()  # [H, W] 인덱스 맵
+    conf = conf[0].cpu().numpy()  # [H, W] 확신도 맵
+
+    # --- 1. 컬러 매핑 (Color Mapping) ---
+    color_map = palette[pred]
+
+    # --- 2. 1번 인덱스 마스킹 (Masking) ---
+    mask_1 = pred == 0
+    mask_overlay = image.copy()
+    mask_overlay[mask_1] = [0, 255, 255]  # 하늘색 마스크
+    mask_final = cv2.addWeighted(image, 0.6, mask_overlay, 0.4, 0)  # 투명도 조절
+
+    # --- 3. 2x2 Subplot 생성 ---
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+
+    # (1,1) Original Image
+    axes[0, 0].imshow(image)
+    axes[0, 0].set_title('1. Original Image', fontsize=15)
+    axes[0, 0].axis('off')
+
+    # (1,2) Color Map (Cityscapes Palette)
+    axes[0, 1].imshow(color_map)
+    axes[0, 1].set_title('2. Semantic Color Map', fontsize=15)
+    axes[0, 1].axis('off')
+
+    # (2,1) Index 1 Mask Highlight
+    axes[1, 0].imshow(mask_final)
+    axes[1, 0].set_title('3. Index 1 (Road/Sidewalk) Mask', fontsize=15)
+    axes[1, 0].axis('off')
+
+    # (2,2) Confidence Map (확신도 시각화)
+    im4 = axes[1, 1].imshow(conf, cmap='jet')
+    axes[1, 1].set_title('4. Prediction Confidence', fontsize=15)
+    fig.colorbar(im4, ax=axes[1, 1], fraction=0.046, pad=0.04)
+    axes[1, 1].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+
+def visualize_refined_road(img_path, pred_index, conf_map, disp_map, palette):
+    image = cv2.imread(img_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # 1. 0번(Road) 기본 마스크
+    road_mask = (pred_index == 0).astype(np.uint8)
+
+    # 2. Conf와 Disp를 결합한 정밀 마스킹 (Refinement)
+    # 확신도가 0.5 이상인 곳만 도로로 인정하고, 경계선(Disp)은 제외하거나 강조
+    refined_mask = (road_mask == 1) & (conf_map > 0.5)
+
+    # 3. 마스킹 이미지 생성 (원본 + 연두색 마스크)
+    mask_overlay = image.copy()
+    mask_overlay[refined_mask] = [0, 255, 100]  # 정밀 마스크 영역
+
+    # 경계선(Disp)을 빨간색 외곽선으로 표시 (시각적 확인용)
+    mask_overlay[disp_map > 0.8] = [255, 0, 0]
+
+    road_result = cv2.addWeighted(image, 0.6, mask_overlay, 0.4, 0)
+
+    # 4. 2x2 Subplot 구성
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+
+    # (0,0) 원본 이미지
+    axes[0, 0].imshow(image)
+    axes[0, 0].set_title('1. Original Image', fontsize=14)
+    axes[0, 0].axis('off')
+
+    # (0,1) 전체 컬러 매핑 (Palette 적용)
+    axes[0, 1].imshow(palette[pred_index])
+    axes[0, 1].set_title('2. Full Semantic Map', fontsize=14)
+    axes[0, 1].axis('off')
+
+    # (1,0) Conf/Disp 기반 정밀 마스킹 (결과물)
+    axes[1, 0].imshow(road_result)
+    axes[1, 0].set_title('3. Refined Road Mask (Conf+Disp)', fontsize=14)
+    axes[1, 0].axis('off')
+
+    # (1,1) 시각적 분석 (Conf와 Disp 중첩)
+    axes[1, 1].imshow(conf_map, cmap='jet', alpha=0.7)
+    axes[1, 1].imshow(disp_map, cmap='gray', alpha=0.3)
+    axes[1, 1].set_title('4. Confidence & Boundary Analysis', fontsize=14)
+    axes[1, 1].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+
+# --- 실행 ---
+# palette = np.array(color_map, dtype=np.uint8)
+# visualize_refined_road(img, pred, conf, disp, palette)
+
+# 실행 예시
+# palette = np.array(color_map, dtype=np.uint8) # 이전 단계에서 정의한 리스트
+# visualize_all_in_one(img_np, model_output, palette)
+
+# 사용 예시 (변수명은 환경에 맞게 수정하세요)
+# visualize_mask_1(original_img_numpy, pred_index)
 
 # --- 기존 코드 루프 내 적용 예시 ---
 # pred_index = postprocess_output(output, org_size)
