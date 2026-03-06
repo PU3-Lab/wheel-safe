@@ -34,6 +34,8 @@ def load_cam_params(config_path, resolution='2K'):
 def get_calibrated_slope(disp, conf, mask, config_path, res='2K'):
     params = load_cam_params(config_path, res)
 
+    print(f'params: {params}')
+
     # Raw 경사도 계산 (카메라 기준)
     raw_angle, _ = estimate_road_slope(disp, conf, mask, params)
 
