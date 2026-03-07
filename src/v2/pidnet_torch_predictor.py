@@ -85,7 +85,7 @@ def postprocess_output(pred, org_size):
     pred_index = torch.argmax(pred, dim=1).squeeze(0).cpu().numpy()
 
     unique, counts = torch.unique(torch.from_numpy(pred_index), return_counts=True)
-    index_counts = dict(zip(unique.tolist(), counts.tolist()))
+    index_counts = dict(zip(unique.tolist(), counts.tolist(), strict=False))
 
     # 3. 빈도수 순으로 정렬 (보통 길이나 하늘이 가장 넓음)
     sorted_indices = sorted(index_counts.items(), key=lambda x: x[1], reverse=True)
