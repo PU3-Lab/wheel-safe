@@ -23,6 +23,12 @@ def raw_data_path(depth_num):
     return path
 
 
+def raw_path():
+    path = root / 'data' / 'raw'
+    Path.mkdir(path, parents=True, exist_ok=True)
+    return path
+
+
 def output_path():
     path = root / 'output'
     Path.mkdir(path, parents=True, exist_ok=True)

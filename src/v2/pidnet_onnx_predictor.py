@@ -5,8 +5,8 @@ import onnxruntime as ort
 from lib.utils.path import model_path
 from v2.heatmap import plot_heatmap_comparison
 
-CONF_THRESHOLD = 0.9
-DISP_THRESHOLD = 1.5
+CONF_THRESHOLD = 0.5
+DISP_THRESHOLD = 0.5
 
 
 class PIDNetOnnxPredictor:
@@ -51,6 +51,9 @@ class PIDNetOnnxPredictor:
         # [p, b, d] 순서로 출력합니다. 첫 번째 결과(p)를 사용합니다.
         main_out = outputs[0]
 
+        for i, out in enumerate(outputs):
+            print(i, out.shape)
+
         # 3. Argmax로 클래스 결정
         pred = np.argmax(main_out[0], axis=0).astype(np.uint8)
 
@@ -60,10 +63,30 @@ class PIDNetOnnxPredictor:
             pred, (w_orig, h_orig), interpolation=cv2.INTER_NEAREST
         )
 
+        print('pred_origin', np.unique(pred_origin))
+
         valid_mask = (conf_map > CONF_THRESHOLD) & (disp_map > DISP_THRESHOLD)
+
+        print(conf_map.dtype, conf_map.min(), conf_map.max())
+        print(disp_map.dtype, disp_map.min(), disp_map.max())
+        print('valid ratio:', np.mean(valid_mask))
+
         road_mask = (np.isin(pred_origin, labels)) & valid_mask
 
-        plot_heatmap_comparison(img_bgr, road_mask)
+        print('road pixels:', np.sum(road_mask))
+        print('road ratio:', np.mean(road_mask))
+
+        plot_heatmap_comparison(img_bgr, pred_origin, road_mask)
+
+        print('conf pass ratio:', np.mean(conf_map > CONF_THRESHOLD))
+        print('disp pass ratio:', np.mean(disp_map > DISP_THRESHOLD))
+        print('valid ratio:', np.mean(valid_mask))
+        print('pred road ratio:', np.mean(np.isin(pred_origin, labels)))
+        print('final road ratio:', np.mean(road_mask))
+
+        for cls_id in np.unique(pred_origin):
+            mask = (pred_origin == cls_id).astype(np.uint8) * 255
+            print(cls_id, np.mean(mask > 0))
 
         return road_mask
 
