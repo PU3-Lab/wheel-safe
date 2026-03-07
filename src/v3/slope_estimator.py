@@ -1,23 +1,84 @@
 import configparser
 
+import cv2
 import numpy as np
 from sklearn.linear_model import RANSACRegressor
 
+CONF_TH = 0.5
+DISP_TH = 0
+
 
 class SlopeEstimator:
-    def __init__(self, config_path, road_index=0):
+    def __init__(self, config_path, road_index=0, debug=False):
         self.model = RANSACRegressor(residual_threshold=0.05, random_state=42)
         self.cam_params = self.__load_cam_params(config_path)
         self.road_index = road_index
+        self.debug = debug
 
     def run(self, pred_index, conf_map, disp_map):
         # 1. 고정밀 마스크 생성 (도로 영역 + 확신도 높음 + 노이즈 제외)
         # Disparity가 0이면 거리가 무한대이므로 제외해야 합니다.
-        valid_mask = (pred_index == self.road_index) & (conf_map > 0.8) & (disp_map > 0)
+        if pred_index.shape != disp_map.shape:
+            pred_index_resized = cv2.resize(
+                pred_index,
+                (disp_map.shape[1], disp_map.shape[0]),  # (width, height) 순서 주의
+                interpolation=cv2.INTER_NEAREST,
+            )
+        else:
+            pred_index_resized = pred_index
+
+        valid_mask = (
+            (pred_index_resized == self.road_index)
+            & (conf_map > CONF_TH)
+            & (disp_map > DISP_TH)
+        )
 
         y_coords, x_coords = np.where(valid_mask)
-        if len(x_coords) < 100:
-            return None
+        if len(x_coords) < 10:  # 최소 10개 이상의 포인트가 있을 때만 실행
+            print('Warning: 유효한 도로 영역 데이터가 부족합니다. (Skipping...)')
+            return 0.0, None  # 기본값 또는 에러를 알릴 수 있는 값 반환
+
+        if self.debug:
+            print('pred shape:', pred_index.shape)
+            print(
+                'conf shape:',
+                conf_map.shape,
+                'min/max:',
+                conf_map.min(),
+                conf_map.max(),
+            )
+            print(
+                'disp shape:',
+                disp_map.shape,
+                'min/max:',
+                disp_map.min(),
+                disp_map.max(),
+            )
+            print('pred unique:', np.unique(pred_index))
+
+            # 예시: road class = 0 이 아니라 8일 수도 있으니 확인 필요
+            debug_road_mask = pred_index == self.road_index
+            print(
+                'road pixels:', debug_road_mask.sum(), 'ratio:', debug_road_mask.mean()
+            )
+
+            debug_conf_valid = conf_map > CONF_TH
+            print(
+                'conf valid:', debug_conf_valid.sum(), 'ratio:', debug_conf_valid.mean()
+            )
+
+            debug_disp_valid = disp_map > 0
+            print(
+                'disp valid:', debug_disp_valid.sum(), 'ratio:', debug_disp_valid.mean()
+            )
+
+            debug_valid_mask = debug_road_mask & debug_conf_valid & debug_disp_valid
+            print(
+                'final valid:',
+                debug_valid_mask.sum(),
+                'ratio:',
+                debug_valid_mask.mean(),
+            )
 
         # 2. Disparity를 실제 거리(Depth, Z)로 변환
         # 공식: Z = (fx * baseline) / disparity
@@ -36,7 +97,9 @@ class SlopeEstimator:
         X_input = np.column_stack((real_x, z_depth))
         Y_target = real_y
 
-        ransac = RANSACRegressor(residual_threshold=0.05)  # 5cm 오차 허용
+        ransac = RANSACRegressor(
+            residual_threshold=0.05, random_state=42
+        )  # 5cm 오차 허용
         ransac.fit(X_input, Y_target)
 
         # 5. 경사도 계산
