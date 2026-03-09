@@ -11,7 +11,7 @@ from lib.utils.path import output_path, raw_path
 from v3.slope_pipeline import SlopePipeline
 
 
-def save_to_csv(root_path):
+def save_to_csv(root_path, folder_name='Depth_*'):
     print(f'DEBUG: root_path is {root_path}')  # 이 부분이 None인지 확인
     if root_path is None:
         raise ValueError('root_path가 None입니다. lib/utils/path.py를 확인하세요.')
@@ -19,7 +19,7 @@ def save_to_csv(root_path):
     all_results = []
 
     # 1. Depth_ 로 시작하는 모든 폴더 찾기
-    depth_folders = sorted(glob(os.path.join(root_path, 'Depth_*')))
+    depth_folders = sorted(glob(os.path.join(root_path, folder_name)))
 
     pipeline = SlopePipeline()
 
