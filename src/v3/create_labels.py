@@ -11,7 +11,7 @@ from lib.utils.path import output_path
 from v3.slope_pipeline import SlopePipeline
 
 
-def process_all_depth_data(root_path):
+def save_to_csv(root_path):
     print(f'DEBUG: root_path is {root_path}')  # 이 부분이 None인지 확인
     if root_path is None:
         raise ValueError('root_path가 None입니다. lib/utils/path.py를 확인하세요.')
@@ -65,17 +65,10 @@ def process_all_depth_data(root_path):
                 )
 
                 pipeline.run(img_path)
-                slope, _ = pipeline.estimate(conf_map, disp_map)
+                slope, mask = pipeline.estimate(conf_map, disp_map)
 
-                # print(f'slope : {slope}')
-
-                # print("prefix:", prefix)
-                # print("disp_path:", disp_path)
-                # print("conf_path:", conf_path)
-                # print("left_path:", img_path)
-                # print("pitch_deg:", pipeline.slop_estimator.cam_params["pitch_deg"])
-                # print("actual_slope_z:", actual_slope_z)
-                # print("real_slope_deg:", slope)
+                if mask is None:
+                    continue
 
                 all_results.append(
                     {
@@ -109,7 +102,3 @@ def process_all_depth_data(root_path):
         print(f'\n✅ 완료! 총 {len(all_results)}개의 데이터 셋이 CSV로 저장되었습니다.')
     else:
         print('❌ 매칭되는 파일 세트를 찾지 못했습니다.')
-
-
-# 실행
-# process_all_depth_data('data/raw')

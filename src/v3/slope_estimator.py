@@ -1,10 +1,11 @@
 import configparser
 
 import numpy as np
-from sklearn.linear_model import LinearRegression, RANSACRegressor
+from sklearn.linear_model import RANSACRegressor
 
 CONF_TH = 0.5
-DISP_TH = 0
+DISP_TH = 0.2
+MIN_POINTS = 30
 
 
 class SlopeEstimator:
@@ -23,8 +24,11 @@ class SlopeEstimator:
         )
 
         y_coords, x_coords = np.where(valid_mask)
-        if len(x_coords) < 10:  # 최소 10개 이상의 포인트가 있을 때만 실행
-            print('Warning: 유효한 도로 영역 데이터가 부족합니다. (Skipping...)')
+        n_points = len(x_coords)
+        if n_points < MIN_POINTS:  # 최소 10개 이상의 포인트가 있을 때만 실행
+            print(
+                f'Warning: 유효 데이터 부족 ({n_points}/{MIN_POINTS}). 계산을 건너뜁니다.'
+            )
             return 0.0, None  # 기본값 또는 에러를 알릴 수 있는 값 반환
 
         if self.debug:
@@ -69,69 +73,30 @@ class SlopeEstimator:
                 debug_valid_mask.mean(),
             )
 
-        # 2. Disparity를 실제 거리(Depth, Z)로 변환
-        # 공식: Z = (fx * baseline) / disparity
-        # 주의: disp_map의 값이 픽셀 단위인지 확인이 필요합니다.
         actual_disp = disp_map[y_coords, x_coords]
         z_depth = (self.cam_params['fx'] * self.cam_params['baseline']) / actual_disp
 
-        # 3. 3D 공간 좌표 복원 (카메라 좌표계)
-        # X = (x - cx) * Z / fx
-        # Y = (y - cy) * Z / fy
         real_x = (x_coords - self.cam_params['cx']) * z_depth / self.cam_params['fx']
         real_y = (y_coords - self.cam_params['cy']) * z_depth / self.cam_params['fy']
 
-        # 4. RANSAC 회귀 분석
-        # 입력(X): 실제 바닥면의 X, Z 좌표 / 타겟(y): 실제 높이인 Y 좌표
         X_input = np.column_stack((real_x, z_depth))
         y_target = real_y
 
-        def adjust_param():
-            n_points = len(x_coords)
-            if n_points < 30:
-                print('Warning: too few valid points')
-                return None, valid_mask
-
-            if n_points < 100:
-                min_samples = max(8, int(n_points * 0.2))
-                residual_threshold = 50.0
-            elif n_points < 300:
-                min_samples = max(12, int(n_points * 0.15))
-                residual_threshold = 40.0
-            elif n_points < 3000:
-                min_samples = max(20, int(n_points * 0.1))
-                residual_threshold = 30.0
-            else:
-                min_samples = min(1000, int(n_points * 0.05))
-                residual_threshold = 30.0
-
-            return min_samples, residual_threshold
-
-        min_samples, residual_threshold = adjust_param()
-
         model = RANSACRegressor(
-            estimator=LinearRegression(),
-            min_samples=min_samples,
-            residual_threshold=residual_threshold,
-            max_trials=300,
-            max_skips=500,
-            stop_probability=0.99,
-            loss='absolute_error',
+            min_samples=max(10, int(n_points * 0.2)),
+            residual_threshold=0.5,  # 단위가 미터라면 0.1~0.2(10~20cm) 추천
+            max_trials=1000,
             random_state=42,
         )
-        model.fit(X_input, y_target)
 
-        # 5. 경사도 계산
-        # z_depth(종방향)에 대한 real_y(높이)의 변화율이 실제 경사입니다.
+        try:
+            model.fit(X_input, y_target)
+        except ValueError:
+            return 0.0, None
+
         slope_rate = model.estimator_.coef_[1]
-        actual_slope_z = -slope_rate
 
-        # angle_rad = np.arctan(actual_slope_z)
-        # angle_deg = np.degrees(angle_rad)  # 각도(degree)
-        # grade_pct = actual_slope_z * 100  # 경사율(%)
-
-        # 카메라 피치(Pitch) 보정: 카메라가 아래를 향하고 있다면 해당 각도만큼 보정 필요
-        rad = np.arctan(actual_slope_z)
+        rad = np.arctan(slope_rate)
         deg = np.degrees(rad)
         real_slope_deg = deg - self.cam_params['pitch_deg']
 
