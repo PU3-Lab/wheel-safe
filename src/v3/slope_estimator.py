@@ -2,18 +2,19 @@ import configparser
 
 import cv2
 import numpy as np
-from sklearn.linear_model import RANSACRegressor
+from sklearn.linear_model import LinearRegression, RANSACRegressor
 
 CONF_TH = 0.5
 DISP_TH = 0
 
 
 class SlopeEstimator:
-    def __init__(self, config_path, road_index=0, debug=False):
-        self.model = RANSACRegressor(residual_threshold=0.05, random_state=42)
-        self.cam_params = self.__load_cam_params(config_path)
+    def __init__(self, road_index=0, debug=False):
         self.road_index = road_index
         self.debug = debug
+
+    def set_config_params(self, config_path):
+        self.cam_params = self.__load_cam_params(config_path)
 
     def run(self, pred_index, conf_map, disp_map):
         # 1. 고정밀 마스크 생성 (도로 영역 + 확신도 높음 + 노이즈 제외)
@@ -95,16 +96,23 @@ class SlopeEstimator:
         # 4. RANSAC 회귀 분석
         # 입력(X): 실제 바닥면의 X, Z 좌표 / 타겟(y): 실제 높이인 Y 좌표
         X_input = np.column_stack((real_x, z_depth))
-        Y_target = real_y
+        y_target = real_y
 
-        ransac = RANSACRegressor(
-            residual_threshold=0.05, random_state=42
-        )  # 5cm 오차 허용
-        ransac.fit(X_input, Y_target)
+        model = RANSACRegressor(
+            estimator=LinearRegression(),
+            min_samples=1000,
+            residual_threshold=30.0,
+            max_trials=300,
+            max_skips=500,
+            stop_probability=0.99,
+            loss='absolute_error',
+            random_state=42,
+        )
+        model.fit(X_input, y_target)
 
         # 5. 경사도 계산
         # z_depth(종방향)에 대한 real_y(높이)의 변화율이 실제 경사입니다.
-        slope_rate = ransac.estimator_.coef_[1]
+        slope_rate = model.estimator_.coef_[1]
         actual_slope_z = -slope_rate
 
         # angle_rad = np.arctan(actual_slope_z)
@@ -113,8 +121,30 @@ class SlopeEstimator:
 
         # 카메라 피치(Pitch) 보정: 카메라가 아래를 향하고 있다면 해당 각도만큼 보정 필요
         rad = np.arctan(actual_slope_z)
-        deg = np.degrees(np.arctan(rad))
+        deg = np.degrees(rad)
         real_slope_deg = deg - self.cam_params['pitch_deg']
+
+        if self.debug:
+            print('valid count:', len(x_coords))
+            print('z min/max:', z_depth.min(), z_depth.max())
+            print('real_y min/max:', real_y.min(), real_y.max())
+            print('coef:', model.estimator_.coef_)
+            print('intercept:', model.estimator_.intercept_)
+
+            inlier_mask = model.inlier_mask_
+            print('inlier count:', inlier_mask.sum())
+            print('inlier ratio:', inlier_mask.mean())
+
+            print('pred shape:', pred_index.shape)
+            print('disp shape:', disp_map.shape)
+            print('conf shape:', conf_map.shape)
+
+            print('disp min/max:', disp_map.min(), disp_map.max())
+            print('conf min/max:', conf_map.min(), conf_map.max())
+
+            print(
+                f'real_slope_deg : {real_slope_deg} pitch{self.cam_params["pitch_deg"]}'
+            )
 
         return real_slope_deg, valid_mask
 

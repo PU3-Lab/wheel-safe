@@ -21,13 +21,16 @@ def process_all_depth_data(root_path):
     # 1. Depth_ 로 시작하는 모든 폴더 찾기
     depth_folders = sorted(glob(os.path.join(root_path, 'Depth_*')))
 
+    pipeline = SlopePipeline()
+
     for folder in depth_folders:
         folder_name = os.path.basename(folder)
         # 폴더 내 모든 파일 리스트업
         files = os.listdir(folder)
 
         config_path = f'{folder}/{folder_name}.conf'
-        pipeline = SlopePipeline(config_path)
+
+        pipeline.set_config_params(config_path)
 
         # 2. 파일명에서 공통 접두어(Prefix) 추출하여 그룹화
         # 예: 'frame1_left.png' -> key: 'frame1'
@@ -52,8 +55,9 @@ def process_all_depth_data(root_path):
                 disp_path = os.path.join(folder, components['disp16'])
                 conf_path = os.path.join(folder, components['confidence'])
 
-                disp_map = cv2.imread(str(disp_path), cv2.IMREAD_UNCHANGED).astype(
-                    np.float32
+                disp_map = (
+                    cv2.imread(str(disp_path), cv2.IMREAD_UNCHANGED).astype(np.float32)
+                    / 16
                 )
                 conf_map = (
                     cv2.imread(str(conf_path), cv2.IMREAD_UNCHANGED).astype(np.float32)
@@ -63,6 +67,16 @@ def process_all_depth_data(root_path):
                 pipeline.run(img_path)
                 slope, _ = pipeline.estimate(conf_map, disp_map)
 
+                # print(f'slope : {slope}')
+
+                # print("prefix:", prefix)
+                # print("disp_path:", disp_path)
+                # print("conf_path:", conf_path)
+                # print("left_path:", img_path)
+                # print("pitch_deg:", pipeline.slop_estimator.cam_params["pitch_deg"])
+                # print("actual_slope_z:", actual_slope_z)
+                # print("real_slope_deg:", slope)
+
                 all_results.append(
                     {
                         'folder': folder_name,
@@ -71,7 +85,7 @@ def process_all_depth_data(root_path):
                         # 'left_file': components['left'],
                         # 'conf_file': components['confidence'],
                         # 'disp_file': components['disp16'],
-                        'slope_avg': round(slope, 4),
+                        'slope_avg': slope,
                     }
                 )
                 print(f'Matched & Processed: {folder_name} / {prefix}')
@@ -90,6 +104,7 @@ def process_all_depth_data(root_path):
             save_path,
             index=False,
             encoding='utf-8-sig',
+            float_format='%.2f',
         )
         print(f'\n✅ 완료! 총 {len(all_results)}개의 데이터 셋이 CSV로 저장되었습니다.')
     else:
