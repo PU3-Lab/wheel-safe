@@ -1,6 +1,5 @@
 import configparser
 
-import cv2
 import numpy as np
 from sklearn.linear_model import LinearRegression, RANSACRegressor
 
@@ -17,19 +16,8 @@ class SlopeEstimator:
         self.cam_params = self.__load_cam_params(config_path)
 
     def run(self, pred_index, conf_map, disp_map):
-        # 1. 고정밀 마스크 생성 (도로 영역 + 확신도 높음 + 노이즈 제외)
-        # Disparity가 0이면 거리가 무한대이므로 제외해야 합니다.
-        if pred_index.shape != disp_map.shape:
-            pred_index_resized = cv2.resize(
-                pred_index,
-                (disp_map.shape[1], disp_map.shape[0]),  # (width, height) 순서 주의
-                interpolation=cv2.INTER_NEAREST,
-            )
-        else:
-            pred_index_resized = pred_index
-
         valid_mask = (
-            (pred_index_resized == self.road_index)
+            (pred_index == self.road_index)
             & (conf_map > CONF_TH)
             & (disp_map > DISP_TH)
         )
@@ -98,10 +86,33 @@ class SlopeEstimator:
         X_input = np.column_stack((real_x, z_depth))
         y_target = real_y
 
+        def adjust_param():
+            n_points = len(x_coords)
+            if n_points < 30:
+                print('Warning: too few valid points')
+                return None, valid_mask
+
+            if n_points < 100:
+                min_samples = max(8, int(n_points * 0.2))
+                residual_threshold = 50.0
+            elif n_points < 300:
+                min_samples = max(12, int(n_points * 0.15))
+                residual_threshold = 40.0
+            elif n_points < 3000:
+                min_samples = max(20, int(n_points * 0.1))
+                residual_threshold = 30.0
+            else:
+                min_samples = min(1000, int(n_points * 0.05))
+                residual_threshold = 30.0
+
+            return min_samples, residual_threshold
+
+        min_samples, residual_threshold = adjust_param()
+
         model = RANSACRegressor(
             estimator=LinearRegression(),
-            min_samples=1000,
-            residual_threshold=30.0,
+            min_samples=min_samples,
+            residual_threshold=residual_threshold,
             max_trials=300,
             max_skips=500,
             stop_probability=0.99,
