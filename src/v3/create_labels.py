@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from lib.utils.path import output_path
+from lib.utils.path import output_path, raw_path
 from v3.slope_pipeline import SlopePipeline
 
 
@@ -102,3 +102,7 @@ def save_to_csv(root_path):
         print(f'\n✅ 완료! 총 {len(all_results)}개의 데이터 셋이 CSV로 저장되었습니다.')
     else:
         print('❌ 매칭되는 파일 세트를 찾지 못했습니다.')
+
+
+if __name__ == '__main__':
+    save_to_csv(raw_path())
