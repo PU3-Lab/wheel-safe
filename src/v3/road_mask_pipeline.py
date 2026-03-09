@@ -28,9 +28,9 @@ class RoadMaskPipeline:
             return preds, org_size
 
     def __create_model(self):
-        model = pidnet.get_pred_model('pidnet_s', num_classes=19)
+        model = pidnet.get_pred_model('pidnet-1', num_classes=19)
 
-        checkpoint_path = str(model_path() / 'PIDNet_S_Cityscapes_val.pt')
+        checkpoint_path = str(model_path() / 'PIDNet_L_Cityscapes_val.pt')
 
         self.model = self.__load_pretrained(model, checkpoint_path)
 
