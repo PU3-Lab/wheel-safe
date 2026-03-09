@@ -27,7 +27,7 @@ COLOR_MAP = [
 
 
 class SlopePipeline:
-    def __init__(self, config_path=None):
+    def __init__(self):
         self.session = RoadMaskPipeline()
         self.slop_estimator = SlopeEstimator()
 
