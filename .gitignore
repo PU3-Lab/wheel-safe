@@ -6,7 +6,8 @@ dist/
 wheels/
 *.egg-info
 data/
-
+dl_datas/
+min_sv/
 # Virtual environments
 .venv
 .DS_Store
