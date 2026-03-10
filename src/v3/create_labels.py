@@ -106,4 +106,4 @@ def save_to_csv(root_path, folder_name='Depth_*'):
 
 
 if __name__ == '__main__':
-    save_to_csv(raw_path())
+    save_to_csv(raw_path(), 'Depth_010')
