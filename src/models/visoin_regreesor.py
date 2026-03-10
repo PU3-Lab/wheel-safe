@@ -17,7 +17,7 @@ class VisionRegressor:
         self.model = timm.create_model(model_name, pretrained=True, num_classes=1).to(
             self.device
         )
-        self.criterion = nn.MSELoss()
+        self.criterion = nn.HuberLoss(delta=1.0)
 
         # 초기 상태: Backbone 고정 (Head만 학습 준비)
         self._freeze_backbone()

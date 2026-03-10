@@ -8,7 +8,24 @@ from torchvision.transforms import Compose, Normalize, Resize, ToTensor
 
 from dataset.slope_dataset import SlopeDataset
 from lib.utils.path import data_path, model_path
+import lib.utils.const as const
+
 from models.visoin_regreesor import VisionRegressor
+from torchvision import transforms
+
+def get_train_transform():
+    return transforms.Compose([
+        transforms.Resize((const.RESIZE_SIZE, const.RESIZE_SIZE)),
+        transforms.RandomCrop((const.CROP_SIZE, const.CROP_SIZE)),
+        transforms.RandomHorizontalFlip(p=0.3),
+        transforms.RandomApply(
+            [transforms.ColorJitter(brightness=0.1, contrast=0.1)],
+            p=0.5,
+        ),
+        transforms.RandomRotation(degrees=3),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=const.IMAGENET_MEAN, std=const.IMAGENET_STD),
+    ])
 
 
 def execute(model_name, path):
@@ -26,13 +43,7 @@ def execute(model_name, path):
     preprocess_df = combine_df[['path', 'slope_avg']]
     print(f'preprossed df : {preprocess_df}')
 
-    transform = Compose(
-        [
-            Resize((224, 224)),
-            ToTensor(),
-            Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ]
-    )
+    transform = get_train_transform()
     train_loader = DataLoader(
         SlopeDataset(preprocess_df, transform), batch_size=16, shuffle=True
     )
