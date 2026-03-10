@@ -1,6 +1,4 @@
-def main():
-    print("Hello from wheel-safe!")
+import train
 
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    train.main()
