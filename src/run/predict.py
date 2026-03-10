@@ -32,6 +32,10 @@ def execute(model_name, input_path, show_image=None):
 
 
 def main():
+    print('=' * 100)
+    print('uv run ./src/run/predict.py')
+    print('=' * 100)
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument(

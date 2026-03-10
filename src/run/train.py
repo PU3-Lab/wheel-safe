@@ -54,6 +54,7 @@ def execute(model_name, path):
 def main():
     print('=' * 100)
     print('uv run train.py efficientnet_b0 ./data/train/')
+    print('=' * 100)
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
