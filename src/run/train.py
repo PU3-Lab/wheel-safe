@@ -29,29 +29,22 @@ def get_train_transform():
     )
 
 
-def execute(model_name, path):
-    all_files = glob.glob(os.path.join(path, '*.csv'))
-    df_list = []
+def execute(model_name, train_path, val_path):
+    train = glob.glob(os.path.join(train_path, '*.csv'))
+    val = glob.glob(os.path.join(val_path, '*.csv'))
 
-    for filename in all_files:
-        df = pd.read_csv(filename, index_col=0)
+    train_df = pd.read_csv(train[0])
+    val_df = pd.read_csv(val[0])
 
-        df_list.append(df)
-        print(f'{filename} 읽기 완료! (행 개수: {len(df)})')
-
-    combine_df = pd.concat(df_list, axis=0, ignore_index=True)
-    print(f'all df{combine_df}')
-    preprocess_df = combine_df[['path', 'slope_avg']]
-    print(f'preprossed df : {preprocess_df}')
+    train_df = train_df[['path', 'slope_avg']]
+    val_df = val_df[['path', 'slope_avg']]
 
     transform = get_train_transform()
     train_loader = DataLoader(
-        SlopeDataset(preprocess_df, transform), batch_size=16, shuffle=True
+        SlopeDataset(train_df, transform), batch_size=16, shuffle=True
     )
 
-    val_loader = DataLoader(
-        SlopeDataset(preprocess_df, transform), batch_size=16, shuffle=True
-    )
+    val_loader = DataLoader(SlopeDataset(val_df, transform), batch_size=16)
 
     trainer = VisionRegressor(model_name=model_name, lr=1e-3)
     path = str(model_path() / 'best_model.pth')
@@ -79,18 +72,25 @@ def main():
         'model_name', nargs='?', help='모델 이름', default='efficientnet_b0'
     )
     parser.add_argument(
-        'root',
+        'train',
         nargs='?',
         help='label 경로(.csv)',
         default=str(data_path() / 'train'),
+    )
+    parser.add_argument(
+        'val',
+        nargs='?',
+        help='label 경로(.csv)',
+        default=str(data_path() / 'val'),
     )
 
     args = parser.parse_args()
 
     model_name = args.model_name
-    path = args.root
+    train_path = args.train
+    val_path = args.val
 
-    execute(model_name, path)
+    execute(model_name, train_path, val_path)
 
 
 if __name__ == '__main__':
