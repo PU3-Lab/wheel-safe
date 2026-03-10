@@ -35,6 +35,7 @@ dependencies = [
     "uuid>=1.30",
     "uvicorn>=0.41.0",
     "xgboost>=3.2.0",
+    "setuptools==69.5.1",
 ]
 
 [[tool.uv.index]]

@@ -1,16 +1,20 @@
 import os
+from datetime import datetime
 
 import timm
 import torch
 import torch.nn as nn
 from PIL import Image
 from sklearn.metrics import r2_score
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from lib.utils.device import get_device
 
 class VisionRegressor:
-    def __init__(self, model_name='efficientnet_b0', lr=1e-3):
+    def __init__(
+        self, model_name='efficientnet_b0', lr=1e-3, log_dir='runs/vision_regressor'
+    ):
         self.device = get_device()
 
         # 모델 생성 (회귀용이므로 출력 노드 1개)
@@ -27,6 +31,11 @@ class VisionRegressor:
             [p for p in self.model.parameters() if p.requires_grad], lr=lr
         )
         self.best_loss = float('inf')
+
+        # TensorBoard
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        self.writer = SummaryWriter(log_dir=f'{log_dir}_{timestamp}')
+        self.global_step = 0
 
     def _freeze_backbone(self):
         """기본적으로 모든 층을 얼리고 마지막 층(Head)만 풉니다."""
@@ -77,8 +86,18 @@ class VisionRegressor:
 
             total_loss += loss.item()
             train_loss = total_loss / step
+            self.global_step += 1
 
             pbar.set_postfix(train_mse=f'{train_loss:.4f}')
+
+            # TensorBoard step 로그
+            self.writer.add_scalar('train/step_mse', loss.item(), self.global_step)
+            self.writer.add_scalar('train/running_mse', train_loss, self.global_step)
+            self.writer.add_scalar(
+                'train/lr',
+                self.optimizer.param_groups[0]['lr'],
+                self.global_step,
+            )
 
             # 중간 평가
             if (
@@ -94,7 +113,9 @@ class VisionRegressor:
                 self.save_checkpoint(val_loss, checkpoint_path)
                 self.model.train()  # evaluate 후 다시 train 모드로 복귀
 
-        return total_loss / len(dataloader)
+        epoch_loss = total_loss / len(dataloader)
+        self.writer.add_scalar('train/epoch_mse', epoch_loss, epoch_idx)
+        return epoch_loss
 
     def save_checkpoint(self, current_loss, path='best_model.pth'):
         """최저 손실값 갱신 시 모델 저장"""
@@ -104,7 +125,7 @@ class VisionRegressor:
             print(f'--- 모델 저장됨 (Best Loss: {current_loss:.4f}) ---')
 
     @torch.no_grad()
-    def evaluate(self, dataloader):
+    def __evaluate(self, dataloader):
         self.model.eval()
         total_loss = 0
 
