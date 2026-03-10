@@ -8,6 +8,8 @@ wheels/
 data/
 dl_datas/
 min_sv/
+min_dl/optuna_checkpoints
+min_dl/runs
 # Virtual environments
 .venv
 .DS_Store
