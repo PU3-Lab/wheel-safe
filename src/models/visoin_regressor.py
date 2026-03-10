@@ -9,7 +9,6 @@ from tqdm import tqdm
 
 from lib.utils.device import get_device
 
-
 class VisionRegressor:
     def __init__(self, model_name='efficientnet_b0', lr=1e-3):
         self.device = get_device()
@@ -87,7 +86,7 @@ class VisionRegressor:
                 and eval_interval is not None
                 and step % eval_interval == 0
             ):
-                val_loss, r2 = self.__evaluate(val_dataloader)
+                val_loss, r2 = self.evaluate(val_dataloader)
                 print(
                     f'\n[Epoch {epoch_idx} | Step {step}/{len(dataloader)}] '
                     f'train_mse={train_loss:.4f}, val_mse={val_loss:.4f}, r2={r2}'

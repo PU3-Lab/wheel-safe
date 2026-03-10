@@ -10,6 +10,7 @@ import lib.utils.const as const
 from dataset.slope_dataset import SlopeDataset
 from lib.utils.path import data_path, model_path
 from models.visoin_regressor import VisionRegressor
+from .predict import get_eval_transform
 
 
 def get_train_transform():
@@ -39,12 +40,16 @@ def execute(model_name, train_path, val_path):
     train_df = train_df[['path', 'slope_avg']]
     val_df = val_df[['path', 'slope_avg']]
 
-    transform = get_train_transform()
+    train_transform = get_train_transform()
+    val_transform = get_eval_transform()
+
     train_loader = DataLoader(
-        SlopeDataset(train_df, transform), batch_size=16, shuffle=True
+        SlopeDataset(train_df, train_transform), batch_size=16, shuffle=True
     )
 
-    val_loader = DataLoader(SlopeDataset(val_df, transform), batch_size=16)
+    val_loader = DataLoader(
+        SlopeDataset(val_df, val_transform), batch_size=16
+    )
 
     trainer = VisionRegressor(model_name=model_name, lr=1e-3)
     path = str(model_path() / 'best_model.pth')

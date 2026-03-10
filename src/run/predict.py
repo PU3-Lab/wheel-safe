@@ -6,7 +6,7 @@ from torchvision import transforms
 
 import lib.utils.const as const
 from lib.utils.path import data_path, model_path
-from models.visoin_regreesor import VisionRegressor
+from models.visoin_regressor import VisionRegressor
 
 
 def get_eval_transform():
