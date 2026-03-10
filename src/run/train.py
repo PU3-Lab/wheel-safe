@@ -31,11 +31,12 @@ def get_train_transform():
 
 
 def execute(model_name, train_path, val_path):
-    train = glob.glob(os.path.join(train_path, '*.csv'))
-    val = glob.glob(os.path.join(val_path, '*.csv'))
+    train_files = glob.glob(os.path.join(train_path, '*.csv'))
+    val_files = glob.glob(os.path.join(val_path, '*.csv'))
 
-    train_df = pd.read_csv(train[0])
-    val_df = pd.read_csv(val[0])
+    # 리스트 컴프리헨션으로 읽어온 뒤 하나로 합치기
+    train_df = pd.concat([pd.read_csv(f) for f in train_files], ignore_index=True)
+    val_df = pd.concat([pd.read_csv(f) for f in val_files], ignore_index=True)
 
     train_df = train_df[['path', 'slope_avg']]
     val_df = val_df[['path', 'slope_avg']]
@@ -59,7 +60,7 @@ def execute(model_name, train_path, val_path):
         )
 
     trainer.unfreeze_all(lr=1e-5)
-    for e in range(3, 6):
+    for e in range(3, 5):
         trainer.train_epoch(
             train_loader, e, val_loader, checkpoint_path=path, eval_interval=50
         )
