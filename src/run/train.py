@@ -10,7 +10,7 @@ import lib.utils.const as const
 from dataset.slope_dataset import SlopeDataset
 from lib.utils.path import data_path, model_path
 from models.visoin_regressor import VisionRegressor
-from .predict import get_eval_transform
+from run.predict import get_eval_transform
 
 
 def get_train_transform():
@@ -47,23 +47,21 @@ def execute(model_name, train_path, val_path):
         SlopeDataset(train_df, train_transform), batch_size=16, shuffle=True
     )
 
-    val_loader = DataLoader(
-        SlopeDataset(val_df, val_transform), batch_size=16
-    )
+    val_loader = DataLoader(SlopeDataset(val_df, val_transform), batch_size=16)
 
     trainer = VisionRegressor(model_name=model_name, lr=1e-3)
     path = str(model_path() / 'best_model.pth')
     trainer.load_best_model(path)
 
-    for e in range(1, 6):
+    for e in range(1, 3):
         trainer.train_epoch(
-            train_loader, e, val_loader, checkpoint_path=path, eval_interval=10
+            train_loader, e, val_loader, checkpoint_path=path, eval_interval=50
         )
 
     trainer.unfreeze_all(lr=1e-5)
-    for e in range(6, 11):
+    for e in range(3, 6):
         trainer.train_epoch(
-            train_loader, e, val_loader, checkpoint_path=path, eval_interval=10
+            train_loader, e, val_loader, checkpoint_path=path, eval_interval=50
         )
 
 
@@ -74,7 +72,7 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        'model_name', nargs='?', help='모델 이름', default='efficientnet_b0'
+        'model_name', nargs='?', help='모델 이름', default='convnext_tiny'
     )
     parser.add_argument(
         'train',

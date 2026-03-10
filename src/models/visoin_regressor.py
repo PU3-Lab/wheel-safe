@@ -5,11 +5,16 @@ import timm
 import torch
 import torch.nn as nn
 from PIL import Image
-from sklearn.metrics import r2_score
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,  # 추가
+    r2_score,
+)
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from lib.utils.device import get_device
+
 
 class VisionRegressor:
     def __init__(
@@ -105,7 +110,7 @@ class VisionRegressor:
                 and eval_interval is not None
                 and step % eval_interval == 0
             ):
-                val_loss, r2 = self.evaluate(val_dataloader)
+                val_loss, r2 = self.__evaluate(val_dataloader)
                 print(
                     f'\n[Epoch {epoch_idx} | Step {step}/{len(dataloader)}] '
                     f'train_mse={train_loss:.4f}, val_mse={val_loss:.4f}, r2={r2}'
@@ -154,6 +159,37 @@ class VisionRegressor:
         return avg_loss, r2
 
     @torch.no_grad()
+    def run_test(self, dataloader):
+        self.model.eval()
+        total_loss = 0
+
+        all_preds = []
+        all_labels = []
+
+        pbar = tqdm(dataloader, desc='testing...')
+
+        for step, (images, labels) in enumerate(pbar, start=1):
+            images = images.to(self.device)
+            labels = labels.to(self.device).float().view(-1)
+
+            outputs = self.model(images).view(-1)
+            loss = self.criterion(outputs, labels)
+
+            total_loss += loss.item()
+
+            all_preds.extend(outputs.cpu().numpy().tolist())
+            all_labels.extend(labels.cpu().numpy().tolist())
+
+            pbar.set_postfix(val_mse=f'{total_loss / step:.4f}')
+
+        avg_loss = total_loss / len(dataloader)
+        r2 = r2_score(all_labels, all_preds)
+        mae = mean_absolute_error(all_labels, all_preds)
+        mse = mean_squared_error(all_labels, all_preds)
+
+        return avg_loss, r2, mae, mse
+
+    @torch.no_grad()
     def predict(self, image_path, transform):
         """이미지 한 장에 대해 slope_avg 예측"""
         self.model.eval()
@@ -171,43 +207,3 @@ class VisionRegressor:
         if os.path.exists(path):
             self.model.load_state_dict(torch.load(path))
             print(f'>>> [완료] {path}로부터 최적 가중치 로드됨')
-
-
-# ==========================================
-# 3. Execution: 실제 실행 루프
-# ==========================================
-# (데이터프레임 'df'가 준비되었다고 가정)
-# transform = transforms.Compose([
-#     transforms.Resize((224, 224)),
-#     transforms.ToTensor(),
-#     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-# ])
-
-# trainer = VisionRegressor(model_name='efficientnet_b0', lr=1e-3)
-# train_loader = DataLoader(SlopeDataset(df, transform), batch_size=16, shuffle=True)
-
-# # Stage 1: Head만 학습
-# for e in range(1, 6):
-#     loss = trainer.train_epoch(train_loader, e)
-#     trainer.save_checkpoint(loss)
-
-# # Stage 2: 전체 미세 조정
-# trainer.unfreeze_all(lr=1e-5)
-# for e in range(6, 11):
-#     loss = trainer.train_epoch(train_loader, e)
-#     trainer.save_checkpoint(loss)
-# 1. 학습 및 검증 루프
-# for e in range(1, 11):
-#     train_loss = trainer.train_epoch(train_loader, e)
-#     val_loss = trainer.evaluate(val_loader) # 검증 수행
-
-#     # 검증 손실 기준으로 체크포인트 저장
-#     trainer.save_checkpoint(val_loss, path='best_slope_model.pth')
-
-# # 2. 학습 종료 후 최적 모델 불러오기
-# trainer.load_best_model('best_slope_model.pth')
-
-# # 3. 새로운 이미지 테스트
-# test_img_path = "data/test_sample.png"
-# result = trainer.predict(test_img_path, transform)
-# print(f"예측된 경사도(Slope): {result:.4f}")
