@@ -6,7 +6,8 @@ import torch
 import torch.nn as nn
 from PIL import Image
 from sklearn.metrics import (
-    mean_absolute_error,  # 추가
+    mean_absolute_error,
+    mean_squared_error,  # 추가
     r2_score,
 )
 from torch.utils.tensorboard import SummaryWriter
@@ -158,7 +159,7 @@ class VisionRegressor:
         return avg_loss, r2
 
     @torch.no_grad()
-    def test(self, dataloader):
+    def run_test(self, dataloader):
         self.model.eval()
         total_loss = 0
 
@@ -183,9 +184,10 @@ class VisionRegressor:
 
         avg_loss = total_loss / len(dataloader)
         r2 = r2_score(all_labels, all_preds)
-        mae = mean_absolute_error(all_labels, all_preds)  # 추가
+        mae = mean_absolute_error(all_labels, all_preds)
+        mse = mean_squared_error(all_labels, all_preds)
 
-        return avg_loss, r2, mae
+        return avg_loss, r2, mae, mse
 
     @torch.no_grad()
     def predict(self, image_path, transform):
