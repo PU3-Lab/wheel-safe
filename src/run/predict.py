@@ -5,17 +5,21 @@ from glob import glob
 from torchvision.transforms import Compose, Normalize, Resize, ToTensor
 
 from lib.utils.path import data_path, model_path
+import lib.utils.const as const
 from models.visoin_regreesor import VisionRegressor
 
+from torchvision import transforms
+
+def get_eval_transform():
+    return transforms.Compose([
+        transforms.Resize((const.RESIZE_SIZE, const.RESIZE_SIZE)),
+        transforms.CenterCrop((const.CROP_SIZE, const.CROP_SIZE)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=const.IMAGENET_MEAN, std=const.IMAGENET_STD),
+    ])
 
 def execute(model_name, input_path, show_image=None):
-    transform = Compose(
-        [
-            Resize((224, 224)),
-            ToTensor(),
-            Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ]
-    )
+    transform = get_eval_transform()
 
     trainer = VisionRegressor(model_name=model_name, lr=1e-3)
     trainer.load_best_model(model_path() / 'best_model.pth')
