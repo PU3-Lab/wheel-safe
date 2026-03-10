@@ -4,6 +4,7 @@ import timm
 import torch
 import torch.nn as nn
 from PIL import Image
+from sklearn.metrics import r2_score
 from tqdm import tqdm
 
 from lib.utils.device import get_device
@@ -48,25 +49,51 @@ class VisionRegressor:
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
         print('>>> [알림] 모든 레이어 활성화 (Fine-tuning 모드)')
 
-    def train_epoch(self, dataloader, epoch_idx):
+    def train_epoch(
+        self,
+        dataloader,
+        epoch_idx,
+        val_dataloader=None,
+        eval_interval=None,
+        checkpoint_path='best_model.pth',
+    ):
+
         self.model.train()
         total_loss = 0
 
         # tqdm 진행바 설정
         pbar = tqdm(dataloader, desc=f'Epoch {epoch_idx}')
 
-        for images, labels in pbar:
-            images, labels = images.to(self.device), labels.to(self.device)
+        for step, (images, labels) in enumerate(pbar, start=1):
+            images = images.to(self.device)
+            labels = labels.to(self.device).float().view(-1)
 
             self.optimizer.zero_grad()
-            outputs = self.model(images).squeeze()  # [B, 1] -> [B]
+
+            outputs = self.model(images).view(-1)  # [B, 1] -> [B]
             loss = self.criterion(outputs, labels)
 
             loss.backward()
             self.optimizer.step()
 
             total_loss += loss.item()
-            pbar.set_postfix(mse=f'{total_loss / (pbar.n + 1):.4f}')
+            train_loss = total_loss / step
+
+            pbar.set_postfix(train_mse=f'{train_loss:.4f}')
+
+            # 중간 평가
+            if (
+                val_dataloader is not None
+                and eval_interval is not None
+                and step % eval_interval == 0
+            ):
+                val_loss, r2 = self.__evaluate(val_dataloader)
+                print(
+                    f'\n[Epoch {epoch_idx} | Step {step}/{len(dataloader)}] '
+                    f'train_mse={train_loss:.4f}, val_mse={val_loss:.4f}, r2={r2}'
+                )
+                self.save_checkpoint(val_loss, checkpoint_path)
+                self.model.train()  # evaluate 후 다시 train 모드로 복귀
 
         return total_loss / len(dataloader)
 
@@ -77,25 +104,34 @@ class VisionRegressor:
             torch.save(self.model.state_dict(), path)
             print(f'--- 모델 저장됨 (Best Loss: {current_loss:.4f}) ---')
 
-    @torch.no_grad()  # 경사도 계산을 꺼서 메모리 절약 및 속도 향상
+    @torch.no_grad()
     def evaluate(self, dataloader):
-        """검증 데이터셋으로 모델 성능 평가"""
-        self.model.eval()  # 추론 모드 전환 (Dropout, BatchNorm 비활성화)
+        self.model.eval()
         total_loss = 0
 
-        # 검증 단계에도 tqdm 적용
+        all_preds = []
+        all_labels = []
+
         pbar = tqdm(dataloader, desc='Evaluating')
 
-        for images, labels in pbar:
-            images, labels = images.to(self.device), labels.to(self.device)
+        for step, (images, labels) in enumerate(pbar, start=1):
+            images = images.to(self.device)
+            labels = labels.to(self.device).float().view(-1)
 
-            outputs = self.model(images).squeeze()
+            outputs = self.model(images).view(-1)
             loss = self.criterion(outputs, labels)
 
             total_loss += loss.item()
-            pbar.set_postfix(val_mse=f'{total_loss / (pbar.n + 1):.4f}')
 
-        return total_loss / len(dataloader)
+            all_preds.extend(outputs.cpu().numpy().tolist())
+            all_labels.extend(labels.cpu().numpy().tolist())
+
+            pbar.set_postfix(val_mse=f'{total_loss / step:.4f}')
+
+        avg_loss = total_loss / len(dataloader)
+        r2 = r2_score(all_labels, all_preds)
+
+        return avg_loss, r2
 
     @torch.no_grad()
     def predict(self, image_path, transform):

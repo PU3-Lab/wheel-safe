@@ -2,21 +2,23 @@ import argparse
 import os
 from glob import glob
 
-from torchvision.transforms import Compose, Normalize, Resize, ToTensor
-
-from lib.utils.path import data_path, model_path
-import lib.utils.const as const
-from models.visoin_regreesor import VisionRegressor
-
 from torchvision import transforms
 
+import lib.utils.const as const
+from lib.utils.path import data_path, model_path
+from models.visoin_regreesor import VisionRegressor
+
+
 def get_eval_transform():
-    return transforms.Compose([
-        transforms.Resize((const.RESIZE_SIZE, const.RESIZE_SIZE)),
-        transforms.CenterCrop((const.CROP_SIZE, const.CROP_SIZE)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=const.IMAGENET_MEAN, std=const.IMAGENET_STD),
-    ])
+    return transforms.Compose(
+        [
+            transforms.Resize((const.RESIZE_SIZE, const.RESIZE_SIZE)),
+            transforms.CenterCrop((const.CROP_SIZE, const.CROP_SIZE)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=const.IMAGENET_MEAN, std=const.IMAGENET_STD),
+        ]
+    )
+
 
 def execute(model_name, input_path, show_image=None):
     transform = get_eval_transform()
