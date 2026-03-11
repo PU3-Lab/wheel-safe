@@ -1,11 +1,14 @@
 import os
 from datetime import datetime
 
+import matplotlib.pyplot as plt
 import numpy as np
 import timm
 import torch
 import torch.nn as nn
 from PIL import Image
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image
 from sklearn.metrics import (
     mean_absolute_error,
     mean_squared_error,  # 추가
@@ -15,6 +18,18 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from lib.utils.device import get_device
+
+
+class RegressionOutputTarget:
+    """
+    회귀 모델용 target.
+    모델 출력이 [B, 1] 또는 [B]일 때 scalar 값을 target으로 사용.
+    """
+
+    def __call__(self, model_output):
+        if model_output.ndim == 2:
+            return model_output[:, 0]
+        return model_output
 
 
 class VisionRegressor:
@@ -227,3 +242,93 @@ class VisionRegressor:
 
     def set_transform(self, transform):
         self.transform = transform
+
+    # tensorboard
+
+    def predict_tensor(self, x: torch.Tensor) -> float:
+        self.model.eval()
+        with torch.inference_mode():
+            pred = self.model(x.to(self.device))
+        return float(pred.squeeze().item())
+
+    def _get_target_layer(self):
+        """
+        Grad-CAM용 target layer 선택.
+        timm EfficientNet 기준 conv_head가 가장 무난.
+        다른 모델도 fallback 되게 처리.
+        """
+        if hasattr(self.model, 'conv_head'):
+            return self.model.conv_head
+
+        if hasattr(self.model, 'layer4'):
+            return self.model.layer4[-1]
+
+        if hasattr(self.model, 'stages'):
+            return self.model.stages[3].blocks[-1]
+
+        if hasattr(self.model, 'blocks'):
+            return self.model.blocks[-1]
+
+        raise ValueError(
+            f'Grad-CAM target layer를 자동으로 찾지 못했습니다: {self.model_name}'
+        )
+
+    def generate_grad_cam(
+        self,
+        x: torch.Tensor,
+        rgb_img: np.ndarray,
+        target_layer,
+    ):
+        """
+        x: 전처리 완료된 입력 텐서, shape [1, C, H, W]
+        rgb_img: 시각화용 원본 RGB 이미지, range [0,1], shape [H,W,3]
+        """
+        self.model.eval()
+
+        for p in self.model.parameters():
+            p.requires_grad = True
+
+        targets = [RegressionOutputTarget()]
+
+        with GradCAM(
+            model=self.model,
+            target_layers=[target_layer],
+        ) as cam:
+            grayscale_cam = cam(
+                input_tensor=x.to(self.device),
+                targets=targets,
+            )[0]  # 첫 배치
+
+        cam_image = show_cam_on_image(
+            rgb_img.astype(np.float32),
+            grayscale_cam,
+            use_rgb=True,
+        )
+
+        pred = self.predict_tensor(x)
+
+        return {
+            'prediction': pred,
+            'grayscale_cam': grayscale_cam,
+            'cam_image': cam_image,
+        }
+
+    def show_grad_cam(
+        self,
+        x: torch.Tensor,
+        rgb_img: np.ndarray,
+        figsize=(8, 8),
+    ):
+        result = self.generate_grad_cam(
+            x=x,
+            rgb_img=rgb_img,
+            target_layer=self._get_target_layer(),
+        )
+
+        plt.figure(figsize=figsize)
+        plt.imshow(result['cam_image'])
+        plt.title(f'Predicted Angle: {result["prediction"]:.2f}°')
+        plt.axis('off')
+        plt.show()
+
+        return result
