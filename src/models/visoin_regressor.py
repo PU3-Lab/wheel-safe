@@ -33,10 +33,10 @@ class RegressionOutputTarget:
 
 
 class VisionRegressor:
-    def __init__(
-        self, model_name='efficientnet_b0', lr=1e-3, log_dir='runs/vision_regressor'
-    ):
+    def __init__(self, model_name='efficientnet_b0', lr=1e-3, log_dir=None):
         self.device = get_device()
+
+        log_dir = f'{log_dir}/{model_name}' if log_dir is not log_dir else 'runs'
 
         # 모델 생성 (회귀용이므로 출력 노드 1개)
         print(f'Using {model_name}')

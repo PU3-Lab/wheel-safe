@@ -8,7 +8,7 @@ from torchvision import transforms
 
 import lib.utils.const as const
 from dataset.slope_dataset import SlopeDataset
-from lib.utils.path import data_path, model_path
+from lib.utils.path import data_path, model_path, runs_path
 from models.visoin_regressor import VisionRegressor
 from run.predict import get_eval_transform
 
@@ -50,7 +50,7 @@ def execute(model_name, train_path, val_path):
 
     val_loader = DataLoader(SlopeDataset(val_df, val_transform), batch_size=16)
 
-    trainer = VisionRegressor(model_name=model_name, lr=1e-3)
+    trainer = VisionRegressor(model_name=model_name, lr=1e-3, log_dir=runs_path())
     path = str(model_path() / 'best_model.pth')
     trainer.load_best_model(path)
 
