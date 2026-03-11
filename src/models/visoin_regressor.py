@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
 
+import numpy as np
 import timm
 import torch
 import torch.nn as nn
@@ -186,8 +187,9 @@ class VisionRegressor:
         r2 = r2_score(all_labels, all_preds)
         mae = mean_absolute_error(all_labels, all_preds)
         mse = mean_squared_error(all_labels, all_preds)
+        rmse = np.sqrt(mse)
 
-        return avg_loss, r2, mae, mse
+        return avg_loss, r2, mae, mse, rmse
 
     @torch.no_grad()
     def predict(self, image_path, transform):

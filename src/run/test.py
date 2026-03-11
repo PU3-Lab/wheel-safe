@@ -25,13 +25,14 @@ def execute_test(model_name, test_path):
     path = str(model_path() / 'best_model.pth')
     trainer.load_best_model(path)
 
-    loss, test_r2, test_mae, mse = trainer.run_test(test_loader)
+    loss, r2, mae, mse, rmse = trainer.run_test(test_loader)
 
     print('✅ 최종 테스트 결과')
     print(f'LOSS: {loss:.4f}')
-    print(f'MAE (평균 각도 오차): {test_mae:.2f}°')
-    print(f'R2 Score: {test_r2:.4f}')
+    print(f'MAE (평균 각도 오차): {mae:.2f}°')
+    print(f'R2 Score: {r2:.4f}')
     print(f'MSE: {mse:.4f}')
+    print(f'RMSE: {rmse:.4f}')
 
 
 if __name__ == '__main__':
