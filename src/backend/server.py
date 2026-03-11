@@ -7,12 +7,14 @@ from PIL import Image, ImageOps
 
 from lib.utils.path import model_path
 from models.visoin_regressor import VisionRegressor
+from run.predict import get_eval_transform
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     model = VisionRegressor(model_name='convnext_tiny')
-    model.load_checkpoint(model_path() / 'best_model_conv.pth')
+    model.load_best_model(model_path() / 'best_model_conv.pth')
+    model.set_transform(get_eval_transform())
     model.model.eval()
 
     app.state.model = model
@@ -25,6 +27,11 @@ app = FastAPI(
 )
 
 # 서버 시작 시 1회만 모델 로드
+
+
+@app.get('/')
+def root():
+    return 'Welcome'
 
 
 @app.get('/health')
