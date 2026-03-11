@@ -277,13 +277,16 @@ class VisionRegressor:
         self,
         x: torch.Tensor,
         rgb_img: np.ndarray,
-        target_layer,
+        target_layer=None,
     ):
         """
         x: 전처리 완료된 입력 텐서, shape [1, C, H, W]
         rgb_img: 시각화용 원본 RGB 이미지, range [0,1], shape [H,W,3]
         """
         self.model.eval()
+
+        if target_layer is None:
+            target_layer = self._get_target_layer()
 
         for p in self.model.parameters():
             p.requires_grad = True
