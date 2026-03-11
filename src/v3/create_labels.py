@@ -79,7 +79,7 @@ def save_to_csv(root_path, folder_name='Depth_*'):
                         # 'conf_file': components['confidence'],
                         # 'disp_file': components['disp16'],
                         'slope_origin': slope,
-                        'slope_avg': abs(slope),
+                        'slope': abs(slope),
                     }
                 )
                 print(f'Matched & Processed: {folder_name} / {prefix}')
