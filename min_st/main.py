@@ -1,3 +1,4 @@
+import base64
 import time
 import random
 from io import BytesIO
@@ -5,7 +6,7 @@ from typing import Dict, Optional
 
 import requests
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageOps
 
 from streamlit_extras.stylable_container import stylable_container
 
@@ -486,6 +487,118 @@ st.markdown(
         font-size:12px;
         color: var(--muted);
     }}
+    
+    .segmented-progress-wrap {{
+        margin-top: 20px;
+    }}
+
+    .segmented-progress-track {{
+        position: relative;
+        width: 100%;
+        height: 28px;
+        border-radius: 999px;
+        overflow: hidden;
+        display: flex;
+        background: #E9EFEA;
+        border: 1px solid rgba(52,110,76,0.10);
+    }}
+
+    .seg-safe,
+    .seg-caution,
+    .seg-danger {{
+        height: 100%;
+    }}
+
+    .seg-safe {{
+        width: 25%;
+        background: rgba(46, 204, 113, 0.20);
+    }}
+
+    .seg-caution {{
+        width: 33.333%;
+        background: rgba(241, 196, 15, 0.22);
+    }}
+
+    .seg-danger {{
+        width: 41.667%;
+        background: rgba(231, 76, 60, 0.18);
+    }}
+
+    .segmented-progress-fill {{
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100%;
+        width: 0;
+        border-radius: 999px;
+        z-index: 2;
+        animation: fillBar 1.4s ease-out forwards;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+    }}
+
+    .fill-safe {{
+        background: linear-gradient(90deg, #2ECC71, #27AE60);
+    }}
+
+    .fill-caution {{
+        background: linear-gradient(90deg, #F1C40F, #D4AC0D);
+    }}
+
+    .fill-danger {{
+        background: linear-gradient(90deg, #E74C3C, #C0392B);
+    }}
+
+    .segmented-progress-marker {{
+        position: absolute;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #FFFFFF;
+        border: 3px solid #1F2A24;
+        z-index: 3;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.18);
+        animation: markerFadeIn 1.5s ease-out forwards;
+        opacity: 0;
+    }}
+
+    .segmented-progress-labels {{
+        display: flex;
+        justify-content: space-between;
+        margin-top: 10px;
+        gap: 8px;
+    }}
+
+    .segmented-progress-labels span {{
+        flex: 1;
+        text-align: center;
+        font-size: 13px;
+        font-weight: 800;
+        color: #5F6B64;
+        line-height: 1.35;
+    }}
+
+    @keyframes fillBar {{
+        from {{
+            width: 0;
+        }}
+        to {{
+            width: var(--target-width);
+        }}
+    }}
+
+    @keyframes markerFadeIn {{
+        0% {{
+            opacity: 0;
+            transform: translate(-50%, -50%) scale(0.7);
+        }}
+        100% {{
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1);
+        }}
+    }}
+
     </style>
     """,
     unsafe_allow_html=True,
@@ -501,7 +614,7 @@ DEFAULTS = {
     "image_bytes": None,
     "image_name": None,
     "result": None,
-    "server_url": "https://api.wheelsafe-demo.com/api/v1/slope/predict",
+    "server_url": "http://127.0.0.1:8000/predict",
 }
 
 for k, v in DEFAULTS.items():
@@ -531,18 +644,41 @@ def set_mode(mode: str) -> None:
 def go_result() -> None:
     st.session_state.screen = "result"
 
-
 def go_processing() -> None:
     st.session_state.screen = "processing"
 
+# def save_uploaded_image(uploaded_file) -> None:
+#     if uploaded_file is None:
+#         return
+#     st.session_state.image_bytes = uploaded_file.getvalue()
+#     st.session_state.image_name = uploaded_file.name
+#     st.session_state.result = None
 
 def save_uploaded_image(uploaded_file) -> None:
     if uploaded_file is None:
         return
-    st.session_state.image_bytes = uploaded_file.getvalue()
+
+    # 1) 원본 바이트 읽기
+    raw_bytes = uploaded_file.getvalue()
+
+    # 2) PIL 로드
+    image = Image.open(BytesIO(raw_bytes))
+
+    # 3) EXIF Orientation 반영하여 실제 픽셀 회전/전치
+    image = ImageOps.exif_transpose(image)
+
+    # 4) 필요 시 색상 모드 정리
+    if image.mode not in ("RGB", "RGBA"):
+        image = image.convert("RGB")
+
+    # 5) 다시 바이트로 저장
+    output = BytesIO()
+    save_format = "PNG" if image.mode == "RGBA" else "JPEG"
+    image.save(output, format=save_format)
+
+    st.session_state.image_bytes = output.getvalue()
     st.session_state.image_name = uploaded_file.name
     st.session_state.result = None
-
 
 def save_camera_image(camera_file) -> None:
     if camera_file is None:
@@ -551,12 +687,15 @@ def save_camera_image(camera_file) -> None:
     st.session_state.image_name = "camera_capture.jpg"
     st.session_state.result = None
 
+# def image_from_session() -> Optional[Image.Image]:
+#     if not st.session_state.image_bytes:
+#         return None
+#     return Image.open(BytesIO(st.session_state.image_bytes))
 
 def image_from_session() -> Optional[Image.Image]:
     if not st.session_state.image_bytes:
         return None
     return Image.open(BytesIO(st.session_state.image_bytes))
-
 
 def classify_risk(angle: float) -> str:
     if angle < 3:
@@ -588,69 +727,69 @@ def gauge_left_percent(angle: float) -> float:
     capped = min(max(angle, 0), 12)
     return (capped / 12.0) * 100.0
 
-
-def fake_predict_api(image_bytes: bytes) -> Dict:
-    # 실제 서버 연동 대신 목업 반환
-    angle = round(random.uniform(1.2, 9.4), 1)
-    mae = round(random.uniform(0.62, 1.24), 2)
-    rmse = round(random.uniform(0.95, 1.88), 2)
-    return {
-        "angle": angle,
-        "risk": classify_risk(angle),
-        "mae": mae,
-        "rmse": rmse,
-        "request_id": f"ws-{random.randint(100000, 999999)}",
-        "model_version": "wheel-safe-slope-v0.9.1",
+# UPDATE
+def request_prediction(image_bytes: bytes, server_url: str, image_name: str) -> Dict:
+    files = {
+        "file": (image_name, image_bytes, "image/jpeg")
     }
 
+    response = requests.post(server_url, files=files, timeout=60)
+    response.raise_for_status()
 
-def request_prediction(image_bytes: bytes, server_url: str) -> Dict:
-    """
-    실제 서버 연동 예시.
-    현재는 목업 우선이며, 아래 requests 코드는 주석 해제 후 사용 가능.
-    """
-    # try:
-    #     files = {"image": ("input.jpg", image_bytes, "image/jpeg")}
-    #     response = requests.post(server_url, files=files, timeout=20)
-    #     response.raise_for_status()
-    #     return response.json()
-    # except Exception:
-    #     return fake_predict_api(image_bytes)
+    data = response.json()
 
-    return fake_predict_api(image_bytes)
+    angle = float(data["predicted_angle"])
 
+    return {
+        "filename": data.get("filename", image_name),
+        "angle": angle,
+        "risk": classify_risk(angle),
+        "unit": data.get("unit", "degree"),
+        "grad_cam_img": data.get("grad_cam_img"),
+    }
 
 def processing_pipeline() -> None:
     if not st.session_state.image_bytes:
         st.warning("먼저 이미지를 등록해주세요.")
         st.session_state.screen = "input"
         st.rerun()
+    try:
+        with st.spinner("도로 경사도를 분석하는 중입니다..."):
+            progress_slot = st.empty()
+            bar = progress_slot.progress(0, text="이미지 업로드 준비 중...")
+            time.sleep(0.2)
+            bar.progress(15, text="이미지 전처리 중...")
+            time.sleep(0.2)
+            bar.progress(35, text="서버로 이미지 전송 중...")
+            time.sleep(0.2)
+            bar.progress(60, text="모델 추론 요청 중...")
 
-    with st.spinner("도로 경사도를 분석하는 중입니다..."):
-        progress_slot = st.empty()
-        bar = progress_slot.progress(0, text="이미지 전처리 중...")
-        time.sleep(0.5)
+            result = request_prediction(
+                image_bytes=st.session_state.image_bytes,
+                server_url=st.session_state.server_url,
+                image_name=st.session_state.image_name or "input.jpg",
+            )
 
-        for v, txt in [
-            (20, "원근 정보 추출 중..."),
-            (45, "도로 영역 검출 중..."),
-            (70, "경사 각도 추정 중..."),
-            (90, "위험도 평가 중..."),
-            (100, "결과 생성 완료"),
-        ]:
-            bar.progress(v, text=txt)
-            time.sleep(0.45)
+            bar.progress(85, text="Grad-CAM 결과 정리 중...")
+            time.sleep(0.2)
 
-        result = request_prediction(
-            st.session_state.image_bytes,
-            st.session_state.server_url
-        )
-        st.session_state.result = result
-        time.sleep(0.3)
+            st.session_state.result = result
 
-    go_result()
-    st.rerun()
+            bar.progress(100, text="결과 생성 완료")
+            time.sleep(0.3)
 
+        go_result()
+        st.rerun()
+
+    except requests.RequestException as e:
+        st.error(f"서버 요청 중 오류가 발생했습니다: {e}")
+        st.session_state.screen = "input"
+        st.rerun()
+
+    except Exception as e:
+        st.error(f"분석 중 오류가 발생했습니다: {e}")
+        st.session_state.screen = "input"
+        st.rerun()
 
 # ---------------------------------------------------
 # Shared Layout
@@ -873,10 +1012,6 @@ def screen_input() -> None:
         with p1:
             st.markdown('<div class="img-panel">', unsafe_allow_html=True)
             st.image(preview, use_container_width=True)
-            st.markdown(
-                f"<div class='tiny'>파일명: {st.session_state.image_name}</div>",
-                unsafe_allow_html=True,
-            )
             st.markdown("</div>", unsafe_allow_html=True)
 
         with p2:
@@ -885,17 +1020,11 @@ def screen_input() -> None:
                 <div class="content-card">
                     <div class="section-title">분석 준비 완료</div>
                     <div class="section-desc">
-                        이미지를 서버로 전송하여 경사 각도, 위험도, 오차 지표를 계산합니다.
+                        이미지를 서버로 전송하여 경사 각도와 위험도를 분석합니다.
                     </div>
                 """,
                 unsafe_allow_html=True,
             )
-            server_url = st.text_input(
-                "Prediction API URL",
-                value=st.session_state.server_url,
-                key="server_url_input",
-            )
-            st.session_state.server_url = server_url
 
             if st.button("경사 분석 시작", key="start_analysis"):
                 go_processing()
@@ -904,20 +1033,10 @@ def screen_input() -> None:
             if st.button("다시 선택하기", key="back_to_select_1"):
                 reset_flow()
                 st.rerun()
-
-            st.markdown(
-                """
-                <div class="secondary-button-note">
-                    현재 데모는 목업 응답을 사용합니다. 실제 서버 연동 시 requests.post로 교체하면 됩니다.
-                </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
     else:
         c1, c2, c3 = st.columns([1, 1, 1])
         with c2:
-            if st.button("입력 방식 다시 선택", key="back_to_select_2"):
+            if st.button("메인 화면 이동", key="back_to_select_2"):
                 reset_flow()
                 st.rerun()
 
@@ -966,10 +1085,9 @@ def screen_result() -> None:
         st.rerun()
 
     angle = float(result["angle"])
-    mae = float(result["mae"])
-    rmse = float(result["rmse"])
     risk = result["risk"]
-    marker_left = gauge_left_percent(angle)
+    grad_cam_img = result.get("grad_cam_img")
+    
     color = risk_color(angle)
     risk_css = risk_class(angle)
 
@@ -980,8 +1098,7 @@ def screen_result() -> None:
         <div class="hero-card">
             <div class="hero-title">도로 경사 분석 결과</div>
             <div class="hero-desc">
-                각도와 위험도를 가장 우선적으로 보여주고,
-                하단에는 모델 오차 지표와 서버 응답 정보를 함께 제공합니다.
+                각도와 위험도를 가장 우선적으로 보여줍니다.
             </div>
         </div>
         """,
@@ -994,89 +1111,113 @@ def screen_result() -> None:
 
     with left:
         st.markdown('<div class="img-panel">', unsafe_allow_html=True)
-        img = image_from_session()
-        if img:
-            st.image(img, use_container_width=True)
-        st.markdown(
-            f"<div class='tiny'>입력 이미지: {st.session_state.image_name or 'captured_image.jpg'}</div>",
-            unsafe_allow_html=True,
-        )
+        if grad_cam_img:
+            cam_bytes = base64.b64decode(grad_cam_img)
+            cam_image = Image.open(BytesIO(cam_bytes))
+            st.image(cam_image, use_container_width=True)
+        else:
+            st.info("Grad-CAM 이미지가 없습니다.")
         st.markdown("</div>", unsafe_allow_html=True)
+        # original_col, cam_col = st.columns(2, gap="medium")
 
+        # with original_col:
+        #     st.markdown('<div class="img-panel">', unsafe_allow_html=True)
+        #     img = image_from_session()
+        #     if img:
+        #         st.image(img, use_container_width=True)
+        #     st.markdown("</div>", unsafe_allow_html=True)
+
+        # with cam_col:
+        #     st.markdown('<div class="img-panel">', unsafe_allow_html=True)
+        #     if grad_cam_img:
+        #         cam_bytes = base64.b64decode(grad_cam_img)
+        #         cam_image = Image.open(BytesIO(cam_bytes))
+        #         st.image(cam_image, use_container_width=True)
+        #     else:
+        #         st.info("Grad-CAM 이미지가 없습니다.")
+        #     st.markdown("</div>", unsafe_allow_html=True)
+
+    ui_max_angle = 12.0
+    fill_percent = min(max((angle / ui_max_angle) * 100, 0), 100)
+
+    if risk == "SAFE":
+        fill_class = "fill-safe"
+    elif risk == "CAUTION":
+        fill_class = "fill-caution"
+    else:
+        fill_class = "fill-danger"
+        
     with right:
         st.markdown(
             f"""
             <div class="result-card">
-                <div class="angle-panel">
-                    <div class="angle-label">Estimated Road Slope</div>
-                    <div class="angle-value" style="color:{color};">{angle:.1f}°</div>
-                    <div class="risk-badge {risk_css}">{risk}</div>
+            <div class="angle-panel">
+            <div class="angle-label">Estimated Road Slope</div>
+            <div class="angle-value" style="color:{color};">{angle:.1f}°</div>
+            <div class="risk-badge {risk_css}">{risk}</div>
 
-                    <div class="gauge-wrap">
-                        <div class="gauge-bar">
-                            <div class="gauge-marker" style="left:{marker_left:.1f}%"></div>
-                        </div>
-                        <div class="gauge-labels">
-                            <span>SAFE<br/>0°–3°</span>
-                            <span>CAUTION<br/>3°–7°</span>
-                            <span>DANGER<br/>>7°</span>
-                        </div>
-                    </div>
-                </div>
+            <div class="segmented-progress-wrap">
+            <div class="segmented-progress-track">
+            <div class="seg-safe"></div>
+            <div class="seg-caution"></div>
+            <div class="seg-danger"></div>
+
+            <div
+                class="segmented-progress-fill {fill_class}"
+                style="--target-width: {fill_percent:.1f}%;"
+            ></div>
+            </div>
+
+            <div class="segmented-progress-labels">
+                <span>SAFE<br/>0°–3°</span>
+                <span>CAUTION<br/>3°–7°</span>
+                <span>DANGER<br/>&gt;7°</span>
+            </div>
+            </div>
+            </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-
-    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-
-    m1, m2, m3, m4 = st.columns(4, gap="medium")
-    with m1:
-        st.metric("MAE", f"{mae:.2f}")
-    with m2:
-        st.metric("RMSE", f"{rmse:.2f}")
-    with m3:
-        st.metric("Risk", risk)
-    with m4:
-        st.metric("Angle", f"{angle:.1f}°")
 
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
     c1, c2 = st.columns([0.7, 0.3], gap="large")
 
     with c1:
-        st.markdown(
-            f"""
-            <div class="content-card">
-                <div class="section-title">서버 응답 정보</div>
-                <div class="section-desc">
-                    실제 서비스에서는 아래 응답이 모델 서버에서 전달된다고 가정합니다.
-                </div>
-                <div class="subtle">
-                    • request_id: <b>{result.get("request_id", "-")}</b><br/>
-                    • model_version: <b>{result.get("model_version", "-")}</b><br/>
-                    • api_url: <b>{st.session_state.server_url}</b><br/>
-                    • recommended_action:
-                        <b>{
-                            "이동 가능" if risk == "SAFE"
-                            else "주의 이동" if risk == "CAUTION"
-                            else "우회 권장"
-                        }</b>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        print('test!')
+        # st.markdown(
+        #     f"""
+        #     <div class="content-card">
+        #         <div class="section-title">서버 응답 정보</div>
+        #         <div class="section-desc">
+        #             실제 서비스에서는 아래 응답이 모델 서버에서 전달된다고 가정합니다.
+        #         </div>
+        #         <div class="subtle">
+        #             • request_id: <b>{result.get("request_id", "-")}</b><br/>
+        #             • model_version: <b>{result.get("model_version", "-")}</b><br/>
+        #             • api_url: <b>{st.session_state.server_url}</b><br/>
+        #             • recommended_action:
+        #                 <b>{
+        #                     "이동 가능" if risk == "SAFE"
+        #                     else "주의 이동" if risk == "CAUTION"
+        #                     else "우회 권장"
+        #                 }</b>
+        #         </div>
+        #     </div>
+        #     """,
+        #     unsafe_allow_html=True,
+        # )
 
     with c2:
-        if st.button("다른 이미지 분석", key="analyze_another"):
+        if st.button("메인 화면 이동", key="analyze_another"):
             st.session_state.image_bytes = None
             st.session_state.image_name = None
             st.session_state.result = None
             st.session_state.screen = "select"
             st.rerun()
 
-        if st.button("같은 모드로 다시", key="same_mode_again"):
+        if st.button("다른 이미지 사용", key="same_mode_again"):
             st.session_state.image_bytes = None
             st.session_state.image_name = None
             st.session_state.result = None
