@@ -24,6 +24,7 @@ class VisionRegressor:
         self.device = get_device()
 
         # 모델 생성 (회귀용이므로 출력 노드 1개)
+        print(f'Using {model_name}')
         self.model = timm.create_model(model_name, pretrained=True, num_classes=1).to(
             self.device
         )
@@ -48,13 +49,21 @@ class VisionRegressor:
         for param in self.model.parameters():
             param.requires_grad = False
 
-        # timm 모델별 Head 이름 대응 (classifier 또는 head)
         if hasattr(self.model, 'classifier'):
-            for param in self.model.classifier.parameters():
-                param.requires_grad = True
+            # EfficientNet 등
+            params_to_update = self.model.classifier.parameters()
         elif hasattr(self.model, 'head'):
-            for param in self.model.head.parameters():
-                param.requires_grad = True
+            # ConvNeXt, ViT 등
+            params_to_update = self.model.head.parameters()
+        elif hasattr(self.model, 'fc'):
+            # ResNet 등
+            params_to_update = self.model.fc.parameters()
+        else:
+            # 예외 처리: 모델 구조를 알 수 없을 때
+            params_to_update = self.model.parameters()
+
+        for param in params_to_update:
+            param.requires_grad = True
 
     def unfreeze_all(self, lr=1e-5):
         """Fine-tuning을 위해 전체 레이어 해제"""
@@ -209,3 +218,12 @@ class VisionRegressor:
         if os.path.exists(path):
             self.model.load_state_dict(torch.load(path))
             print(f'>>> [완료] {path}로부터 최적 가중치 로드됨')
+
+    @torch.inference_mode()
+    def predict_pil(self, image: Image.Image) -> float:
+        x = self.transform(image).unsqueeze(0).to(self.device)
+        pred = self.model(x)
+        return pred.squeeze().item()
+
+    def set_transform(self, transform):
+        self.transform = transform
