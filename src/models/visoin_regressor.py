@@ -320,6 +320,7 @@ class VisionRegressor:
         self,
         x: torch.Tensor,
         rgb_img: np.ndarray,
+        filename: str,
         figsize=(8, 8),
     ):
         result = self.generate_grad_cam(
@@ -330,7 +331,7 @@ class VisionRegressor:
 
         plt.figure(figsize=figsize)
         plt.imshow(result['cam_image'])
-        plt.title(f'Predicted Angle: {result["prediction"]:.2f}°')
+        plt.title(f'{filename} Predicted Angle: {result["prediction"]:.2f}°')
         plt.axis('off')
         plt.show()
 
