@@ -64,26 +64,33 @@ class VisionRegressor:
         for param in self.model.parameters():
             param.requires_grad = False
 
-        if hasattr(self.model, 'classifier'):
-            # EfficientNet 등
-            params_to_update = self.model.classifier.parameters()
-        elif hasattr(self.model, 'head'):
-            # ConvNeXt, ViT 등
-            params_to_update = self.model.head.parameters()
-        elif hasattr(self.model, 'fc'):
-            # ResNet 등
-            params_to_update = self.model.fc.parameters()
-        else:
-            # 예외 처리: 모델 구조를 알 수 없을 때
-            params_to_update = self.model.parameters()
+        def parameters():
+            if hasattr(self.model, 'classifier'):
+                # EfficientNet 등
+                return self.model.classifier.parameters()
+            elif hasattr(self.model, 'head'):
+                # ConvNeXt, ViT 등
+                return self.model.head.parameters()
+            elif hasattr(self.model, 'fc'):
+                # ResNet 등
+                return self.model.fc.parameters()
+            else:
+                # 예외 처리: 모델 구조를 알 수 없을 때
+                raise ValueError()
 
-        for param in params_to_update:
-            param.requires_grad = True
+        try:
+            for param in parameters():
+                param.requires_grad = True
+        except ValueError as e:
+            return print(
+                f'지원하지 않는 모델 구조입니다. head layer 이름을 확인하세요. {e}'
+            )
 
     def unfreeze_all(self, lr=1e-5):
         """Fine-tuning을 위해 전체 레이어 해제"""
         for param in self.model.parameters():
             param.requires_grad = True
+
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
         print('>>> [알림] 모든 레이어 활성화 (Fine-tuning 모드)')
 
