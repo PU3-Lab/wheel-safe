@@ -8,7 +8,7 @@ from torchvision import transforms
 
 import lib.utils.const as const
 from dataset.slope_dataset import SlopeDataset
-from lib.utils.path import data_path, model_path
+from lib.utils.path import data_path, model_path, runs_path
 from models.visoin_regressor import VisionRegressor
 from run.predict import get_eval_transform
 
@@ -30,7 +30,7 @@ def get_train_transform():
     )
 
 
-def execute(model_name, train_path, val_path):
+def execute(model_name, train_path, val_path, epoch=2):
     train_files = glob.glob(os.path.join(train_path, '*.csv'))
     val_files = glob.glob(os.path.join(val_path, '*.csv'))
 
@@ -50,17 +50,19 @@ def execute(model_name, train_path, val_path):
 
     val_loader = DataLoader(SlopeDataset(val_df, val_transform), batch_size=16)
 
-    trainer = VisionRegressor(model_name=model_name, lr=1e-3)
+    trainer = VisionRegressor(model_name=model_name, lr=1e-3, log_dir=runs_path())
     path = str(model_path() / 'best_model.pth')
     trainer.load_best_model(path)
 
-    for e in range(1, 3):
+    trans_ep_cnt = 1 + epoch
+    for e in range(1, trans_ep_cnt):
         trainer.train_epoch(
             train_loader, e, val_loader, checkpoint_path=path, eval_interval=50
         )
 
+    fine_ep_cnt = 3 + epoch
     trainer.unfreeze_all(lr=1e-5)
-    for e in range(3, 5):
+    for e in range(3, fine_ep_cnt):
         trainer.train_epoch(
             train_loader, e, val_loader, checkpoint_path=path, eval_interval=50
         )
@@ -68,7 +70,14 @@ def execute(model_name, train_path, val_path):
 
 def main():
     print('=' * 100)
-    print('uv run train.py efficientnet_b0 ./data/train/')
+    print("""
+        ** 사용법 **
+        arg1 : 모델이름
+        arg2 : train data path
+        arg3 : val data path
+        arg4 : epoch 수
+        ex) uv run train.py arg1 arg2 arg3 arg4
+    """)
     print('=' * 100)
     parser = argparse.ArgumentParser()
 
@@ -88,13 +97,21 @@ def main():
         default=str(data_path() / 'val'),
     )
 
+    parser.add_argument(
+        'epoch',
+        nargs='?',
+        help='label 경로(.csv)',
+        default=2,
+    )
+
     args = parser.parse_args()
 
     model_name = args.model_name
     train_path = args.train
     val_path = args.val
+    epoch = args.epoch
 
-    execute(model_name, train_path, val_path)
+    execute(model_name, train_path, val_path, epoch)
 
 
 if __name__ == '__main__':

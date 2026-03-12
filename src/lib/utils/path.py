@@ -33,3 +33,9 @@ def output_path():
     path = root / 'output'
     Path.mkdir(path, parents=True, exist_ok=True)
     return path
+
+
+def runs_path():
+    path = root / 'runs'
+    Path.mkdir(path, parents=True, exist_ok=True)
+    return path
