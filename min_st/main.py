@@ -267,6 +267,31 @@ st.markdown(
         line-height: 1;
         margin: 10px 0 8px 0;
         letter-spacing: -2px;
+        transform-origin: center;
+    }}
+
+    .angle-value-danger-pop {{
+        animation: dangerAnglePop 0.75s cubic-bezier(0.2, 0.9, 0.25, 1.2) 1;
+        text-shadow: 0 0 0 rgba(231, 76, 60, 0);
+    }}
+
+    @keyframes dangerAnglePop {{
+        0% {{
+            transform: scale(1);
+            text-shadow: 0 0 0 rgba(231, 76, 60, 0);
+        }}
+        35% {{
+            transform: scale(1.18);
+            text-shadow: 0 0 18px rgba(231, 76, 60, 0.28);
+        }}
+        60% {{
+            transform: scale(0.96);
+            text-shadow: 0 0 8px rgba(231, 76, 60, 0.18);
+        }}
+        100% {{
+            transform: scale(1);
+            text-shadow: 0 0 0 rgba(231, 76, 60, 0);
+        }}
     }}
 
     .angle-label {{
@@ -1146,6 +1171,8 @@ def screen_result() -> None:
         fill_class = "fill-caution"
     else:
         fill_class = "fill-danger"
+
+    angle_animation_class = "angle-value-danger-pop" if risk == "DANGER" else ""
         
     with right:
         st.markdown(
@@ -1153,7 +1180,7 @@ def screen_result() -> None:
             <div class="result-card">
             <div class="angle-panel">
             <div class="angle-label">Estimated Road Slope</div>
-            <div class="angle-value" style="color:{color};">{angle:.1f}°</div>
+            <div class="angle-value {angle_animation_class}" style="color:{color};">{angle:.1f}°</div>
             <div class="risk-badge {risk_css}">{risk}</div>
 
             <div class="segmented-progress-wrap">
